@@ -1,0 +1,1668 @@
+---
+title: "Przygotowanie i walidacja danych"
+
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 2
+---
+# Wstęp
+
+**Pytanie badawcze: Czy kraje europejskie o wysokim PKB i dużym udziale gospodarki leśnej w PKB mają wysoki poziom lesistości?**
+
+*Hipoteza badawcza: Kraje europejskie o wysokim PKB i dużym udziale gospodarki leśnej w PKB mają wysoki poziom lesistości.*
+
+**Pytanie badawcze: Czy istnieje zależność między wielkością powierzchni lądowej krajów europejskich a poziomem lesistości oraz udziałem gospodarki leśnej w PKB?**
+
+*Hipoteza badawcza: Kraje europejskie o dużej powierzchni lądowej mają większy poziom lesistości i udział gospodarki leśnej w PKB.*
+
+## Biblioteki
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(GGally)
+library(VIM)
+library(rcompanion)
+```
+
+## Funkcje
+
+Funkcja **convert_to_long** przekształca tabelę, która zawiera lata w wielu kolumnach na tabelę z kolumną **Year** i odpowiednią kolumną z wartością.
+
+```{r}
+convert_to_long <- function(df, value_col = "value") {
+  # Argumenty:
+  # df - zbiór danych typu data.frame
+  # value_col - nazwa nowej zmiennej/kolumny, do której trafią wartości po zmianie układu danych
+  # jeśli nie podano, domyślnie przyjmowana jest nazwa "value"
+  
+  # wyszukiwanie nazw kolumn zawierających lata
+  year_cols <- grep(
+    "19[0-9]{2}|20[0-9]{2}",  # lata od 1900 do 2099
+    names(df),              # wektor nazw kolumn zbioru df
+    value = TRUE            # zwróć nazwy kolumn, a nie ich indeksy
+  )
+  
+  # jeśli wektor year_cols jest pusty, funkcja przerywa działanie i wyświetla błąd
+  if (length(year_cols) == 0) stop("Nie znaleziono kolumn lat w tabeli.") 
+  
+  # konwersja wszystkich kolumn z latami do typu numerycznego
+  df[year_cols] <- lapply(
+    df[year_cols],          # podzbiór danych: tylko kolumny z latami
+    function(x)             # funkcja działająca na każdej kolumnie
+      as.numeric(           # konwersja do typu numerycznego
+        as.character(x)     # najpierw konwersja do character
+      )
+  )
+  
+  # transformacja danych do układu prostokątnego danych
+  df_long <- df %>% 
+    # zamienia wybrane kolumny w wiersze, tworząc kolumnę 'Year'
+    tidyr::pivot_longer( # oraz kolumnę z odpowiadającymi im wartościami.
+      cols = all_of(year_cols),  # kolumny, które mają zostać "spłaszczone"
+      names_to = "Year",         # nazwa nowej kolumny z latami
+      values_to = value_col     # nazwa kolumny z wartościami (argument funkcji)
+    ) %>%
+    dplyr::mutate(
+      Year = stringr::str_extract(
+        Year,                    # kolumna Year (pochodzi z nazw kolumn)
+        "19[0-9]{2}|20[0-9]{2}"   # wydobycie samego roku z nazwy kolumny
+      ),
+      Year = as.numeric(Year)    # konwersja kolumny Year do typu numerycznego
+    )
+
+  return(df_long) # zwrócenie przekształconego zbioru danych
+}
+```
+
+Funkcja **normal_dstr_check** rysuje histogram, wykres kwantyl-kwantyl i wykonuje test Shaphiro-Wilka, w celu sprawdzenia czy nasza zmienna ma rozkład normalny.
+
+```{r}
+normal_dstr_check <- function(df, column_name, bins = 30, custom_title, custom_xlab) {
+  # Argumenty:
+  # df - zbiór danych typu data.frame
+  # column_name - zmienna poddana analizie
+  # bins - argument histogramu odpowiedzialny za liczbę przedziałów
+  # jeśli nie podano, domyślnie przyjmowana jest liczba 30
+  # custom_title - element tytułu
+  # custom_xlab - etykieta osi X
+  
+  # if() - instrukcja warunkowa sprawdzająca spełnienie warunku
+  # %in% - sprawdza, czy element znajduje się w danym zbiorze
+  # colnames() - zwraca nazwy kolumn data.frame
+  if (!column_name %in% colnames(df)) { # Sprawdzenie czy kolumna istnieje
+    stop("Kolumna nie istnieje w data frame.") # przerywa działanie funkcji i zgłasza błąd
+  }
+
+  data <- df[[column_name]] # [[ ]] - wyodrębnia pojedynczą kolumnę z data.frame
+  data <- na.omit(data) # na.omit() - usuwa obserwacje zawierające wartości NA
+  
+  # ggplot() - inicjalizuje obiekt wykresu w pakiecie ggplot2
+  # aes() - definiuje estetyki wykresu
+  p1 <- ggplot(data.frame(x = data), aes(x = x)) +
+    
+    # geom_histogram() - rysuje histogram rozkładu zmiennej
+    geom_histogram(bins = bins, fill = "forestgreen", color = "black", na.rm = TRUE) +
+    
+    labs( # labs() - dodaje tytuł i opisy osi wykresu
+      title = paste("Histogram", custom_title), # łączy tekst z nazwą zmiennej
+      x = custom_xlab, y = "Liczebność"
+    ) +
+    theme_minimal() + # ustawia minimalistyczny motyw wykresu
+    theme( # theme() - modyfikacja elementów motywu
+      plot.title = element_text(hjust = 0.5) # hjust = 0.5 oznacza wyśrodkowanie tytułu
+    )
+  
+  print(p1)
+  
+  p2 <- ggplot(data.frame(sample = data), aes(sample = sample)) +
+    stat_qq() + # stat_qq() - tworzy punkty wykresu kwantyl-kwantyl
+    stat_qq_line(color = "red") + # dodaje linię odniesienia dla rozkładu normalnego
+    
+    labs( # labs() - dodaje tytuł i opisy osi
+      title = paste("Wykres kwantyl-kwantyl", custom_title),
+      x = "Teoretyczne kwantyle",
+      y = "Kwantyle empiryczne"
+    ) +
+    
+    theme_minimal() + # theme_minimal() - minimalistyczny motyw wykresu
+    theme( # theme() - modyfikacja elementów motywu
+      plot.title = element_text(hjust = 0.5) # hjust = 0.5 oznacza wyśrodkowanie tytułu
+    )
+  
+  print(p2)
+  
+  # shapiro.test() - przeprowadza test Shapiro-Wilka normalności rozkładu
+  shapiro_result <- shapiro.test(data)
+  
+  return(shapiro_result)
+}
+```
+
+Funkcja **normal_log_dstr_check** rysuje histogram, wykres kwantyl-kwantyl i wykonuje test Shaphiro-Wilka dla zlogarytmowanej zmiennej, w celu sprawdzenia, czy ma ona rozkład log-normalny. 
+
+```{r}
+normal_log_dstr_check <- function(df, column_name, bins = 30, custom_title, custom_xlab) {
+  # Argumenty:
+  # df - zbiór danych typu data.frame
+  # column_name - zmienna poddana analizie
+  # bins - argument histogramu odpowiedzialny za liczbę przedziałów
+  # jeśli nie podano, domyślnie przyjmowana jest liczba 30
+  # custom_title - element tytułu
+  # custom_xlab - etykieta osi X
+  
+  # if() - instrukcja warunkowa sprawdzająca warunek
+  # %in% - sprawdza, czy element znajduje się w danym zbiorze
+  # colnames() - zwraca nazwy kolumn data.frame
+  # stop() - przerywa działanie funkcji i zgłasza błąd
+  if (!column_name %in% colnames(df)) { # Sprawdzenie czy kolumna istnieje
+    stop("Kolumna nie istnieje w data frame.") 
+  }
+  
+  data <- df[[column_name]] # [[ ]] - wyodrębnia pojedynczą kolumnę z data.frame
+  data <- na.omit(data) # na.omit() - usuwa obserwacje zawierające wartości NA
+
+  data <- data[data > 0] # Filtracja wartości dodatnich (log nie działa dla <= 0)
+  
+  # length() - sprawdza liczbę elementów w wektorze
+  if (length(data) < 3) stop("Za mało danych po usunięciu wartości niedodatnich.")
+  
+  log_data <- log(data) # log() - oblicza logarytm naturalny każdej wartości
+  
+  # data.frame() - tworzy ramkę danych dla ggplot
+  # ggplot() - inicjalizuje obiekt wykresu w pakiecie ggplot2
+  # aes() - definiuje estetyki wykresu (mapowanie zmiennych)
+  p1 <- ggplot(data.frame(x = log_data), aes(x = x)) +
+    # geom_histogram() - rysuje histogram rozkładu zmiennej
+    geom_histogram(bins = bins, fill = "forestgreen", color = "black", na.rm = TRUE) +
+
+    labs( # labs() - dodaje tytuł i opisy osi wykresu
+      title = paste("Histogram", custom_title, "po logarytmizacji"), # łączy tekst z nazwą zmiennej
+      x = paste("log(", custom_xlab, ")"),
+      y = "Liczebność"
+    ) +
+
+    theme_minimal() + # theme_minimal() - ustawia minimalistyczny motyw wykresu
+    theme( # theme() - modyfikacja elementów motywu
+      plot.title = element_text(hjust = 0.5) # hjust = 0.5 oznacza wyśrodkowanie tytułu
+    )
+  
+  print(p1)
+  
+  p2 <- ggplot(data.frame(sample = log_data), aes(sample = sample)) +
+    stat_qq() + # stat_qq() - tworzy punkty wykresu kwantyl-kwantyl
+    stat_qq_line(color = "red") + # dodaje linię odniesienia dla rozkładu normalnego
+    
+    labs( # labs() - dodaje tytuł i opisy osi
+      title = paste("Wykres kwantyl-kwantyl", custom_title, "po logarytmizacji"),
+      x = "Teoretyczne kwantyle",
+      y = "Kwantyle empiryczne"
+    ) +
+    
+    theme_minimal() + # theme_minimal() - minimalistyczny motyw wykresu
+    theme( # theme() - modyfikacja elementów motywu
+      plot.title = element_text(hjust = 0.5) # hjust = 0.5 oznacza wyśrodkowanie tytułu
+    )
+  
+  print(p2)
+  
+  # shapiro.test() - przeprowadza test Shapiro-Wilka normalności rozkładu dla log(X)
+  shapiro_result <- shapiro.test(log_data)
+  
+  return(shapiro_result)
+}
+```
+
+Funkcja **anova_table** przedstawia analizę wariancji (ANOVA) dla wszystkich zmiennych ilościowych w zbiorze danych względem wybranej zmiennej jakościowej. Dodatkowo określa, które zmienne ilościowe różnią się istotnie statystycznie między grupami.
+
+```{r}
+anova_table <- function(df, cat_var, alpha = 0.05) {
+  # Argumenty:
+  # df - zbiór danych typu data.frame
+  # cat_var - nazwa zmiennej jakościowej, na której wykonujemy test ANOVA
+  # alpha - poziom istotności
+  
+  # if() - instrukcja warunkowa sprawdzająca spełnienie warunku
+  # %in% - sprawdza, czy element znajduje się w wektorze
+  # names() - zwraca nazwy kolumn data.frame
+  # stop() - przerywa działanie funkcji z komunikatem, jeśli warunek nie jest spełniony
+  # Sprawdzenie czy zmienna jakościowa istnieje
+  if (!cat_var %in% names(df)) stop("Zmienna jakościowa nie istnieje w podanym zbiorze danych")
+  
+  # data.frame() - tworzy pustą ramkę danych na wyniki
+  # character(), numeric(), logical() - inicjalizuje kolumny odpowiednich typów
+  # Tabela wyników
+  results <- data.frame(categorical_var = character(),
+                        numeric_var = character(),
+                        p_value = numeric(),
+                        significant = logical(),
+                        stringsAsFactors = FALSE) # wyłącza konwersję znaków na czynniki
+  
+  # sapply() - stosuje funkcję do każdej kolumny
+  # is.numeric() - sprawdza, czy kolumna jest typu numerycznego
+  # names() - pobiera nazwy kolumn spełniających warunek
+  # Lista zmiennych ilościowych
+  numeric_vars <- names(df)[sapply(df, is.numeric)]
+  
+  for (num_var in numeric_vars) { # pętla po wszystkich zmiennych ilościowych
+    # Wydzielenie tylko wierszy bez NA w zmiennej ilościowej i jakościowej
+    tmp_df <- df[, c(cat_var, num_var)]
+    # complete.cases() - sprawdza kompletność wierszy (bez NA)
+    tmp_df <- tmp_df[complete.cases(tmp_df), ]
+    
+    # nrow() - sprawdza liczbę wierszy po usunięciu NA
+    # if() + stop() - w tym przypadku pętla kontynuuje tylko jeśli są wiersze
+    if (nrow(tmp_df) > 0) {
+      # paste0() - łączy tekst bez separatora
+      # as.formula() - tworzy formułę w formacie `zmienna_ilościowa` ~ zmienna_jakościowa
+      fmla <- as.formula(paste0("`", num_var, "` ~ ", cat_var))
+      
+      aov_res <- aov(fmla, data = tmp_df) # wykonuje ANOVA dla danej formuły
+      # summary() - podsumowuje wyniki ANOVA
+      # [[1]] - wybiera pierwszą tabelę z listy podsumowania
+      # [["Pr(>F)"]][1] - wyciąga wartość p dla testu F
+      p_val <- summary(aov_res)[[1]][["Pr(>F)"]][1]
+      
+      # Dodanie wyniku do tabeli
+      results <- rbind(results, # rbind - dodaje nowy wiersz do istniejącej ramki danych
+                       data.frame(categorical_var = cat_var,
+                                  numeric_var = num_var,
+                                  p_value = p_val,
+                                  # oznaczenie istotności statystycznej
+                                  significant = p_val < alpha))
+    }
+  }
+  
+  return(results)
+}
+```
+
+Funkcja **boxplot_outliers** tworzy wykres pudełkowy dla jednej zmiennej ilościowej i wykrywa obserwacje odstające (outliery) w oparciu o regułę IQR (rozstęp międzykwartylowy), dodatkowo zwraca tabelę z tymi obserwacjami odstającymi. 
+
+```{r}
+boxplot_outliers <- function(df, y_var, k = 1.5, log_scale = FALSE, print_table = TRUE, 
+                             custom_title, custom_ylab) {
+  # Argumenty:
+  # df - zbiór danych typu data.frame
+  # y_var - zmienna/kolumna, dla której rysujemy wykres pudełkowy
+  # k - współczynnik określający jak daleko od kwartylów ma znajdować się obserwacja, 
+  # aby była uznana za odstającą, domyślna wartość: 1.5
+  # log_scale - argument typu boolean, który przy True zmienia skalę y na logarytmiczną
+  # domyślna wartość False
+  # print_table - argument typu boolean, który przy False nie rysuje tabeli
+  # domyślna wartość True
+  # custom_title - element tytułu
+  # custom_ylab - etykieta osi Y
+  
+  # if() + %in% + names() + stop() - sprawdza, czy kolumna istnieje, w przeciwnym 
+  # wypadku przerywa działanie
+  if (!y_var %in% names(df)) {
+    stop("Podana zmienna nie istnieje w ramce danych.")
+  }
+  
+  Q1  <- quantile(df[[y_var]], 0.25, na.rm = TRUE) # oblicza kwartyl (Q1 = 25%)
+  Q3  <- quantile(df[[y_var]], 0.75, na.rm = TRUE) # oblicza kwartyl (Q3 = 75%)
+  IQR_val <- IQR(df[[y_var]], na.rm = TRUE) # IQR() oblicza rozstęp międzykwartylowy
+  
+  # Obliczenie granic dla obserwacji odstających w skali liniowej
+  lower_bound <- Q1 - k * IQR_val
+  upper_bound <- Q3 + k * IQR_val
+  
+  # Tworzenie kolumny logicznej outlier_linear (TRUE = obserwacja poza granicami)
+  df$outlier_linear <- df[[y_var]] < lower_bound | df[[y_var]] > upper_bound
+  
+  df$outlier_color <- NA_character_ # Inicjalizacja koloru obserwacji odstających
+  
+  # Jeśli log_scale = TRUE, wykonujemy dodatkowe obliczenia w skali logarytmicznej
+  if (log_scale) {
+    log_df <- log(df[[y_var]]) # log() - oblicza logarytm naturalny wartości
+    
+    # quantile() i IQR() - obliczenie granic Q1, Q3 i IQR w skali log
+    Q1_log  <- quantile(log_df, 0.25, na.rm = TRUE)
+    Q3_log  <- quantile(log_df, 0.75, na.rm = TRUE)
+    IQR_log <- IQR(log_df, na.rm = TRUE)
+    
+    # Granice obserwacji odstających w skali log
+    lower_bound_log <- Q1_log - k * IQR_log
+    upper_bound_log <- Q3_log + k * IQR_log
+    
+    # Tworzenie kolumny logicznej outlier_log
+    df$outlier_log <- log_df < lower_bound_log | log_df > upper_bound_log
+    
+    # dplyr::case_when() - przypisuje obserwacje do kolumny outlier_color
+    # na podstawie warunków logicznych
+    df$outlier_color <- dplyr::case_when(
+      df$outlier_linear & df$outlier_log ~ "Odstająca", # czerwony
+      df$outlier_linear & !df$outlier_log ~ "Odstająca przed logarytmizacją, \nteraz już nie jest", # zielony
+      !df$outlier_linear & df$outlier_log ~ "Odstająca po logarytmizacji,\nwcześniej nie była", # pomarańczowy
+      TRUE ~ NA_character_ # pozostałe - brak koloru
+    )
+    
+    # dplyr::filter() - tworzy tabelę zawierającą tylko obserwacje odstające w logarytmie
+    outliers_table <- dplyr::filter(df, outlier_log)
+    
+  } else {
+    # Skala liniowa: przypisanie koloru tylko dla liniowych obserwacji odstających
+    df$outlier_color <- ifelse(df$outlier_linear, "Odstająca", NA_character_)
+    
+    # Tworzenie tabeli obserwacji odstających w skali liniowej
+    outliers_table <- dplyr::filter(df, outlier_linear)
+  }
+  
+  # Tworzymy kolumnę y_plot do wykresu
+  df$y_plot <- df[[y_var]]
+  
+  # aes() - określa estetyki wykresu (x = "", y = y_plot)
+  # geom_boxplot() - rysuje wykres pudełkowy, outlier.shape = NA ukrywa obserwacje odstające
+  # geom_jitter() - rysuje obserwacje odstające z lekkim przesunięciem w poziomie
+  # filter(!is.na(outlier_color)) - wybiera tylko wiersze z oznaczonym kolorem obserwacji odstających
+  p <- ggplot(df, aes(x = "", y = y_plot)) +
+    geom_boxplot(outlier.shape = NA, na.rm = T) +
+    geom_jitter(
+      data = df %>% filter(!is.na(outlier_color)),
+      aes(y = y_plot, color = outlier_color),
+      width = 0.2, height = 0
+    ) +
+    
+    labs( # labs() - dodaje tytuł, opisy osi i legendy
+      title = paste("Wykres pudełkowy", custom_title),
+      x = "", y = custom_ylab,
+      color = "Typ obserwacji"
+    ) +
+    
+    scale_color_manual( # ręczne przypisanie kolorów do kategorii
+      values = c(
+        "Odstająca" = "red",
+        "Odstająca przed logarytmizacją, \nteraz już nie jest" = "green",
+        "Odstająca po logarytmizacji,\nwcześniej nie była" = "orange"
+      ),
+      drop = TRUE
+    ) +
+    theme_minimal() +  # minimalistyczny motyw wykresu
+    theme( # theme() - modyfikacja elementów motywu
+      plot.title = element_text(hjust = 0.5) # hjust = 0.5 oznacza wyśrodkowanie tytułu
+    )
+  # Jeśli log_scale = TRUE, dodajemy skalę logarytmiczną dla osi y
+  if (log_scale) p <- p + scale_y_log10()
+  
+  print(p) # wyświetlanie wykresu
+  
+  # print() - wyświetlenie tabeli obserwacji odstających, jeśli print_table = TRUE
+  if (print_table) print(outliers_table)
+}
+```
+
+Funkcja **quartile_groups** dzieli zmienną ilościową na kwartyle z możliwością dodania własnych nazw grup.
+
+```{r}
+quartile_groups <- function(df, num_var, new_col_name = NULL, group_labels = NULL) {
+  # Argumenty:
+  # df - zbiór danych typu data.frame
+  # num_car - kolumna, którą chcemy podzielić na kategorie
+  # new_col_name - nazwa nowej kolumny
+  # group-labels - nazwy nowych grup
+  
+  # if() + %in% + names() + stop() - sprawdzenie, czy zmienna numeryczna 
+  # istnieje w data.frame, jeśli nie - błąd
+  if (!num_var %in% names(df)) {
+    stop("Podana zmienna ilościowa nie istnieje w zbiorze danych.")
+  }
+  
+  if (is.null(new_col_name)) { #  is.null() sprawdza, czy argument nie został podany
+    # paste0() - tworzy domyślną nazwę nowej kolumny (np. "zmienna_quartile")
+    new_col_name <- paste0(num_var, "_quartile")
+  }
+  
+  # tworzenie domyślnych etykiet kwartylowych
+  if (is.null(group_labels)) { # is.null() - sprawdza, czy etykiety grup nie zostały podane
+    group_labels <- c("Q1", "Q2", "Q3", "Q4")
+  } 
+  # sprawdzenie długości wektora etykiet
+  else if (length(group_labels) != 4) {
+    stop("group_labels musi mieć dokładnie 4 elementy")
+  }
+  
+  # dplyr::mutate() - dodaje nową kolumnę do data.frame
+  # !!new_col_name := - operator w tidyverse pozwalający dynamicznie nazwać nową kolumnę
+  # cut() - dzieli zmienną numeryczną na kategorie według określonych przedziałów
+  # quantile() - oblicza granice kwartylowe (0%, 25%, 50%, 75%, 100%)
+  # probs = seq(0, 1, 0.25) - określa wartości procentowe kwartylów
+  # include.lowest = TRUE - włącza najmniejszą wartość do pierwszego przedziału
+  # labels = group_labels - nadaje etykiety nowym grupom
+  df <- df %>%
+    mutate(
+      !!new_col_name := cut(.data[[num_var]],
+                            breaks = quantile(.data[[num_var]], probs = seq(0, 1, 0.25), 
+                            na.rm = TRUE), include.lowest = TRUE,
+                            labels = group_labels)
+    )
+
+  return(df)  # return() - zwraca zmodyfikowany data.frame z nową kolumną kwartylową
+}
+```
+
+
+# Zbiór danych FOREST
+
+**Link do zbioru danych:** [FOREST](https://www.kaggle.com/datasets/kanchana1990/global-forest-insights-1990-2020-fao)
+
+Poniższy zbiór danych przedstawia krajobraz światowych lasów w latach 1990-2020 oparty na ocenach FAO (Food and Agriculture Organization of the United Nations, czyli Organizacji Narodów Zjednoczonych do spraw Wyżywienia i Rolnictwa). Zawiera szczegółowy obraz powierzchni leśnych w 236 krajach i terytoriach ukazując zmiany na przestrzeni 30 lat. Dane zostały udostępnione z raportu "Global Forest Resources Assessments 2020" o numerze DOI: 10.4060/ca9825en.
+
+| Nazwa zmiennej               | Opis 
+|------------------------------|------------------------------------------------------------------
+| `CountryID`                  | ID kraju lub regionu
+| `Country and Area`           | Nazwa kraju lub regionu 
+| `Forest.Area`                | Powierzchnia lasów w tysiącach hektarów w różnych latach
+| `Total.Land.Area..2020`      | Całkowita powierzchnia lądowa w 2020 roku (w tysiącach hektarów) 
+| `Forest Proportion (%) 2020` | Udział lasów jako procent całkowitej powierzchni lądowej 
+| `Deforestation Rate`         | Zmiana powierzchni lasów w czasie  
+| `Area Affected by Fire 2015` | Powierzchnia lasów dotknięta pożarami w 2015 roku 
+
+Wczytujemy dane z pliku **Forest_Area** i pokazujemy pierwsze 6 rekordów:
+
+```{r}
+forest <- read.csv("Forest_Area.csv") # wczytanie pliku typu csv
+head(forest) # pokazuje pierwsze 6 rekordów zbioru data frame
+```
+
+Ten zbiór danych to dobry zestaw danych do analiz na poziomie globalnym i krajowym, ale z istotnymi ograniczeniami w zakresie „jakości” informacji. Możemy wyróżnić wady i zalety tego zbioru danych:
+
+**Zalety:**
+
+- Szeroki zakres czasowy i geograficzny, poniweaż zbiór obejmuje lata 1990-2020, czyli 30 lat zmian, co daje dobrą perspektywę długoterminową i pozwala na identyfikację trendów w czasie (np. utrata lasów, odnowa, różnice między dekadami) oraz pokrywa aż 236 krajów i terytoriów, co zapewnia dużą przestrzenną reprezentatywność: zarówno dla krajów rozwiniętych, jak i rozwijających się, stref klimatycznych, różnych typów lasów i gospodarek. 
+
+- Dane pochodzą od uznanej instytucji, ten zbiór powiązany jest z oceną Global Forest Resources Assessment 2020 (FRA 2020) realizowaną przez FAO, co oznacza, że dane są zbierane i zestawiane w ramach oficjalnych procesów raportowania międzynarodowego. FRA to projekt, który monitoruje zasoby leśne globalnie od wielu dekad, co dodaje wiarygodności zbiorowi. 
+
+**Wady:**
+
+- Zróżnicowana jakość danych, ponieważ choć dane są agregowane przez FAO, to poszczególne kraje mogą korzystać z różnych metod pomiaru (np. inwentaryzacja leśna, raporty krajowe, dane satelitarne, oszacowania), co może prowadzić do niespójności między krajami w sposobie zbierania, definicji „lasu”, częstotliwości pomiarów.
+
+- Ograniczona liczba zmiennych, wersja datasetu „Global Forest Insights 1990-2020” udostępnia plik Forest_Area.csv, co sugeruje, że podstawową zmienną jest powierzchnia lasów. Taki zakres może być wystarczający do analiz zmian w lesistości, ale nie daje informacji o jakości lasów - np. struktura wiekowa, bioróżnorodność, skład gatunkowy, kondycja ekosystemu, zmiany degradacyjne, fragmentacja, zdrowie drzewostanu, biomasa. To ogranicza możliwość wnioskowania np. o usługach ekosystemowych, dobrostanie przyrody.
+
+Należy również pamiętać, że istnieje ryzyko nadinterpretacji - globalne lub krajowe trendy mogą maskować lokalne i regionalne problemy - np. wylesienie pierwotnych lasów tropikalnych, fragmentację, degradację gleby. Zatem uogólnienia mogą być mylące, jeśli zakładamy, że zmiany są równomierne lub że „poprawa” globalna równa się z poprawą w każdym regionie.
+
+Sprawdzimy wielkość tego zbioru danych:
+
+```{r}
+length(forest) # zwraca liczbę elementów (kolumn) w data.frame
+nrow(forest) # zwraca liczbę wierszy w data.frame
+colnames(forest) # zwraca nazwy kolumn w data.frame
+```
+
+Zbiór danych **forest** składa się z 11 kolumn i 239 rekordów obejmujących krajowe obszary leśne, obszary lądowe, wylesienia i dane dotyczące występowania pożarów. W celu łatwiejszego późniejszego odwoływania się do poszczególnych kolumn, zmienimy nazwy kolumn na krótsze.
+
+```{r}
+forest <- forest %>% rename( # zmienia nazwy kolumn
+  'Country' = "Country.and.Area",
+  'FA1990' = 'Forest.Area..1990',
+  'FA2000' = 'Forest.Area..2000',
+  'FA2010' = 'Forest.Area..2010',
+  'FA2015' = 'Forest.Area..2015',
+  'FA2020' = 'Forest.Area..2020',
+  'TLAXX' = 'Total.Land.Area..2020',
+  'AFPTLA' = 'Forest.Area.as.a.Proportion.of.Total.Land.Area..2020',
+  'Defor' = 'Deforestation..2015.2020',
+  'TFAAFXV' = 'Total.Forest.Area.Affected.by.Fire..2015')
+```
+
+W naszej analizie chcemy skupić się tylko na krajach europejskich, z tego powodu tworzymy wektor zawierający nazwy 48 państw leżących w Europie.
+
+```{r}
+europe <- c("Albania", "Andorra", "Austria",
+            "Belarus", "Belgium", "Bosnia and Herzegovina", "Bulgaria",
+            "Croatia", "Czech Republic",
+            "Denmark",
+            "Estonia",
+            "Finland", "France",
+            "Georgia", "Germany", "Greece",
+            "Hungary",
+            "Iceland", "Ireland", "Italy",
+            "Kazakhstan", "Kosovo",
+            "Latvia", "Liechtenstein", "Lithuania", "Luxembourg",
+            "Malta", "Moldova", "Monaco", "Montenegro",
+            "Netherlands", "North Macedonia", "Norway",
+            "Poland", "Portugal",
+            "Romania", "Russia",
+            "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland",
+            "Turkey",
+            "Ukraine", "United Kingdom", 
+            "Vatican City")
+```
+
+Tworzymy zmniejszony zbiór danych, w którym będą zawierać się tylko kraje europejskie oraz sprawdzamy, które nazwy krajów z naszej listy nie pojawiają się w naszej bazie danych.
+
+```{r}
+forest_eu <- forest[forest$Country %in% europe, ]
+setdiff(europe, forest_eu$Country) # setdiff() zwraca różnicę zbiorów
+```
+
+Zauważyliśmy, że w 6 państwach pojawiły się problemy, mianowicie w przypadku United Kingdom (w bazie była nazwa "United Kingdom of Great Britain and Northern Ireland"), Czech Republic (w bazie występowała nazwa "Czechia"), Russia (występowała jako "Russian Federation"), Kosovo (nie występuje w naszej bazie danych), Vatican City (występuje jako "Holy See"), Moldova (w danych jest "Republic of Moldova"). Zatem tworzymy nowy wektor, w którym uwzględnimy inne nazwy państw, a Kosowo pomijamy.
+
+```{r}
+eu <- c("Albania", "Andorra", "Austria",
+        "Belarus", "Belgium", "Bosnia and Herzegovina", "Bulgaria",
+        "Croatia", "Czechia",
+        "Denmark",
+        "Estonia",
+        "Finland", "France",
+        "Georgia", "Germany", "Greece",
+        "Holy See", "Hungary",
+        "Iceland", "Ireland", "Italy",
+        "Kazakhstan",
+        "Latvia", "Liechtenstein", "Lithuania", "Luxembourg",
+        "Malta", "Monaco", "Montenegro",
+        "Netherlands", "North Macedonia", "Norway",
+        "Poland", "Portugal",
+        "Republic of Moldova", "Romania", "Russian Federation",
+        "San Marino", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland",
+        "Turkey",
+        "Ukraine", "United Kingdom of Great Britain and Northern Ireland")
+```
+
+Tworzymy teraz skrócony zbiór danych z uwzględnieniem problematycznych nazw państw i ponownie sprawdzamy czy nasza baza posiada wszystkie kraje z listy.
+
+```{r}
+forest_eu <- forest[forest$Country %in% eu, ]
+setdiff(eu, forest_eu$Country)
+```
+
+Character(0) mówi nam, że w naszej bazie znajdują się wszystkie elementy z listy.
+
+Następnie przeanalizujemy kluczowe miary opisowe, takie jak: minimum, maksimum, medianę, średnią oraz kwartyle. Pozwoli to nam uzyskać szybki pogląd na zakres i centralną tendencję badanych zmiennych.
+
+```{r}
+summary(forest_eu) # summary() prezentuje kluczowe miary opisowe
+```
+
+Średnia powierzchnia leśna w latach 1990-2020 wynosiła od około 21 700 do 22 200 tys. ha, przy czym wartości skrajne sięgały ponad 800 000 tys. ha, co wskazuje na dużą różnorodność danych między krajami. Mediana powierzchni leśnej w poszczególnych latach oscylowała w granicach 2 200-2 400 tys. ha, co sugeruje, że większość krajów ma znacznie mniejsze powierzchnie leśne niż kilka największych krajów. Wskaźniki wylesiania i lesistości (np. Powierzchnia lądowa (**TLAXX**), Procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**)) wykazują podobną zmienność, a wartości średnie wskazują na umiarkowany poziom zmian w pokryciu leśnym.
+
+W podsumowaniu widać, że zmienne w większości są ilościowe, natomiast zmienne **Country**, **FA2015**, **Defor** oraz **TFAAFXV** zostały wczytane jako typ tekstowy, który zgadza się tylko dla zmiennej dotyczącej państw (**Country**), w takim razie zmieniamy typ zmiennej w kolumnach **FA2015**, **Defor** i **TFAAFXV** na numeryczny.
+
+```{r warning=FALSE}
+forest_eu$FA2015 <- as.numeric(forest_eu$FA2015) # as.numeric() zmienia typ zmiennej na typ numeryczny
+forest_eu$Defor <- as.numeric(forest_eu$Defor)
+forest_eu$TFAAFXV <- as.numeric(forest_eu$TFAAFXV)
+```
+
+Sprawdzamy teraz czy w zbiorze występują jakieś braki danych.
+
+```{r}
+colSums(is.na(forest_eu[colnames(forest_eu)])) # colSums() sumuje elementy w kolumnach
+# is.na() - zwraca 1 jeśli jest NA i 0 jeśli nie jest
+```
+
+Braki danych występują w kolumnie dotyczącej zmiany powierzchni lasów (**Defor**), ponadto na stronie nie podano sposobu wyliczenia tej zmiennej, co więcej mamy różny rozstęp w latach (raz mamy różnicę 10 lat, a raz 5 lat). Braki pojawiają się również w kolumnie **TFAAFXV**, która dotyczy powierzchni lasów dotkniętych pożarami w 2015 roku. Nie będziemy korzystać z tej kolumny, więc ją usuniemy, dodatkowo usuniemy kolumnę **CountryID**, z której również nie będziemy korzystać, ponieważ potrzebne są nam tylko nazwy państw z kolumny **Country**.
+
+```{r}
+forest_eu <- forest_eu %>%
+  select(-CountryID, -TFAAFXV, -Defor) # za pomocą select wybieramy kolumny, które chcemy usunąć
+```
+
+
+# Zbiór danych GDP_EUROPA
+
+**Link do zbioru danych:** [GDP\_EUROPA](https://data.imf.org/en/Data-Explorer?datasetUrn=IMF.RES:WEO(9.0.0))
+
+Poniższy zbiór danych pochodzi z bazy World Economic Outlook (WEO) Międzynarodowego Funduszu Walutowego, który jest jednym z najbardziej uznanych źródeł informacji makroekonomicznych na świecie i obejmuje zarówno dane historyczne, jak i prognozy. Na potrzeby analizy ograniczyliśmy się jedynie do państw położonych w Europie, co pozwala na skupienie się na regionalnych zróżnicowaniach oraz porównywalnych uwarunkowaniach gospodarczych. WEO aktualizowane jest dwa razy w roku i oparte na jednolitych standardach statystycznych, co zwiększa wiarygodność oraz spójność porównań międzynarodowych. Dane dotyczą PKB krajów w miliardach dolarów amerykańskich, podlegają ujednoliceniu przez IMF (International Monetary Fund, czyli Międzynarodowy Fundusz Walutowy), co zapewnia ich większą porównywalność między krajami. Należy jednak pamiętać, że dla niektórych państw wartości te mogą zawierać szacunki, szczególnie tam, gdzie lokalne źródła danych są ograniczone lub opóźnione.
+
+Wczytujemy dane z pliku **GDP_EUROPA** i pokazujemy pierwsze 6 rekordów:
+
+```{r}
+GDP <- read.csv("GDP_EUROPA.csv")
+head(GDP)
+```
+
+Sprawdzimy podstawowe statystyki zmiennych.
+
+```{r}
+summary(GDP)
+```
+
+Zbiór danych zawiera 45 obserwacji opisanych zmiennymi typu tekstowego oraz szeregiem wartości liczbowych dla lat 1990-2020. Dane roczne (X1990-X2020) są ilościowe i charakteryzują się dużą zmiennością między krajami - w wielu latach występują zarówno małe wartości (ok. 1-2 mld dolarów), jak i bardzo duże (sięgające nawet kilku bilionów dolarów). Widoczne są również braki danych (NA), zwłaszcza w latach 1990-1994. Mediany i kwartyle sugerują, że większość krajów ma relatywnie niskie wartości, a wysokie maksima wynikają z kilku dużych obserwacji. Ogólnie zmienne roczne wyglądają na poprawnie numeryczne. 
+
+Zauważamy, że kolumny **SCALE** oraz **FREQUENCY** dotyczące charakterystyki zbioru danych są stałe, zatem możemy je usunąć.
+
+```{r}
+unique(GDP$SCALE); unique(GDP$FREQUENCY) # unique() zwraca wartości bez powtórzeń
+```
+
+Dodatkowo usuwamy pierwsze trzy kolumny (**DATASET**, **SERIES_CODE**, **OBS_MEASURE**) i kolumny **INDICATOR**, **FREQUENCY**, **SCALE**, ponieważ nie będą wykorzystywane w dalszej części projektu - potrzebujemy tylko kolumny z nazwami państw (**COUNTRY**), żeby móc potem połączyć nasze zbiory danych.
+
+```{r}
+GDP <- GDP %>%
+  select(-DATASET, -SERIES_CODE, -OBS_MEASURE, -INDICATOR, -FREQUENCY, -SCALE)
+```
+
+Sprawdźmy teraz, które nazwy państw różnią się zapisem od nazw zawartych w wektorze *eu*, ponieważ w celu połączenia zbiorów danych, będziemy musieli uwzględnić różne nazwy państw, co wykonamy w dalszej części. 
+
+```{r}
+setdiff(eu, GDP$COUNTRY)
+```
+
+Po przanalizowaniu zbioru **GDP** zauważamy, że dane dla Monako oraz Watykanu w ogóle nie zostały w nim uwzględnione, zajmiemy się tym po połączeniu wszystkich zbiorów.
+
+
+# Zbiór danych GDP_FOREST
+
+**Link do zbioru danych:** [GDP\_FOREST](https://databank.worldbank.org/source/world-development-indicators/Series/NY.GDP.FRST.RT.ZS)
+
+Dane pochodzą z bazy World Development Indicators (WDI) prowadzonej przez Bank Światowy. Konkretnie wykorzystano wskaźnik o kodzie NY.GDP.FRST.RT.ZS, opisujący renty leśne jako procent PKB (Forest rents % of GDP). Jest to część szerszego projektu Banku Światowego The Changing Wealth of Nations, który szacuje wartość zasobów naturalnych i ich wpływ na gospodarkę. Zbiór przedstawia roczne dane z okresu 1970-2021 (my ograniczyliśmy je do danych z lat: 1990, 2000, 2010, 2015 i 2020 dla 46 krajów europejskich - bez Kosowa i Watykanu) dotyczące udziału rent leśnych w PKB poszczególnych krajów. Renty leśne obliczane są jako wartość pozyskanego drewna, przemnożona przez regionalne ceny i regionalne stawki czynszu. Otrzymany wynik wyraża, jaką część PKB stanowi ekonomiczna nadwyżka generowana z eksploatacji lasów. Dane są agregowane jako ważona średnia, a jednostką miary jest procent PKB. Wskaźnik mierzy, w jakim stopniu zasoby leśne przyczyniają się do dochodu gospodarczego kraju.
+
+Wczytujemy dane z pliku **gdp_forest** i pokazujemy pierwsze 6 rekordów:
+
+```{r}
+gdp_forest <- read.csv("gdp_forest.csv")
+head(gdp_forest)
+```
+
+Sprawdzimy podstawowe statystyki zmiennych.
+
+```{r}
+summary(gdp_forest)
+```
+
+Zmienne opisowe (nazwy krajów i kodów) są zmiennymi tekstowymi, natomiast dane liczbowe przedstawiają udział procentowy rent leśnych w PKB. W każdym roku wartości wahają się od 0% do ponad 1-2% PKB gospodarki leśnej, co oznacza, że w części państw dochody z zasobów leśnych mają małe znaczenie, natomiast w kilku krajach stanowią bardziej zauważalny element gospodarki. Mediany utrzymują się na poziomie 0.07-0.09%, co wskazuje, że dla większości państw znaczenie rent leśnych jest niewielkie, a wyższe średnie wynikają z obecności kilku obserwacji o bardzo dużych wartościach. W miarę upływu lat wartości pozostają na podobnym poziomie, bez wyraźnych trendów wzrostowych lub spadkowych w statystykach opisowych. Na co zwróciliśmy uwagę to fakt, że dla lat 1990 dane mają charakter tekstowy, dlatego zmienimy je na typ numeryczny.
+
+```{r warning=FALSE}
+gdp_forest$X1990..YR1990. <- as.numeric(gdp_forest$X1990..YR1990.)
+```
+
+Analizując zbiór danych zauważyliśmy również, że w 5 ostatnich wierszach występują dane dotyczące licencji, zatem usuwamy je, żeby mieć tylko dane dla państw.
+
+```{r}
+tail(gdp_forest, 5) # tail() zwraca 5 ostatnich rekordów zbioru data.frame
+```
+
+```{r}
+gdp_forest <- gdp_forest[1:(nrow(gdp_forest) - 5), ] # zmniejsza gdp_forest o 5 ostatnich wierszy
+```
+
+Zauważamy, że kolumny **Series.Name** i **Series.Code**, które dotyczą charakterystyki zbioru danych, są unikalne, więc możemy je usunąć.
+
+```{r}
+unique(gdp_forest$Series.Name); unique(gdp_forest$Series.Code)
+```
+
+Kolumna **Country.Code** również nie będzie nam potrzebna, bo będziemy korzystać z **Country.Name**, zatem ją usuniemy.
+
+```{r}
+gdp_forest <- gdp_forest %>%
+  select(-Series.Name, -Series.Code, -Country.Code)
+```
+
+Sprawdzamy, ile mamy braków danych w zbiorze.
+
+```{r}
+colSums(is.na(gdp_forest[colnames(gdp_forest)]))
+```
+
+Braki występują tylko w kolumnie 1990, co wiąże się z tym, że nie wszystkie państwa zapisywały swoje dane w tamtych czasach. Potencjalnie można zastanowić się nad usunięciem tej kolumny.
+
+Sprawdźmy teraz, które nazwy państw będą wymagać zmiany w późniejszym etapie naszej pracy.
+
+```{r}
+setdiff(eu, gdp_forest$Country.Name)
+```
+
+Analizując nasz zbiór danych zauważamy, że dane dla Watykanu nie są tutaj zawarte, czym zajmiemy się po połączeniu całej bazy.
+
+
+# Zbiór danych FOREST_GDP_DB
+
+Zajmiemy się teraz aktualizacją nazw państw, żeby w każdej z trzech tabel mieć identyczne nazwy. Stworzymy więc wektor **country_fix**, w którym uwzględnimy różne nazwy państw występujące w naszych zbiorach i zmienimy je na wspólną nazwę.
+
+```{r}
+country_fix <- c(
+  "Andorra, Principality of" = "Andorra",
+  "Belarus, Republic of" = "Belarus",
+  "Croatia, Republic of" = "Croatia", 
+  "Czech Republic" = "Czechia",
+  "Estonia, Republic of" = "Estonia",
+  "Kazakhstan, Republic of" = "Kazakhstan",
+  "Latvia, Republic of" = "Latvia", 
+  "Liechtenstein, Principality of" = "Liechtenstein",
+  "Lithuania, Republic of" = "Lithuania", 
+  "Moldova, Republic of" = "Republic of Moldova",
+  "North Macedonia, Republic of" = "North Macedonia",
+  "Netherlands, The" = "Netherlands",
+  "Netherlands (Kingdom of the)" = "Netherlands",
+  "Poland, Republic of" = "Poland",
+  "San Marino, Republic of" = "San Marino",
+  "Serbia, Republic of" = "Serbia",
+  "Slovak Republic" = "Slovakia",
+  "Slovenia, Republic of" = "Slovenia",
+  "Türkiye, Republic of" = "Türkiye",
+  "Turkiye" = "Türkiye",
+  "Turkey" = "Türkiye",
+  "United Kingdom of Great Britain and Northern Ireland" = "United Kingdom")
+```
+
+Uaktualniamy nazwy państw w 3 zbiorach danych.
+
+```{r}
+# recode() - funkcja z dplyr do zamiany wartości w wektorze
+# !!! - rozpakowuje listę country_fix, traktując każdą parę jako jeżeli element ma wartość starą, zamień na nową
+forest_eu$Country <- recode(forest_eu$Country, !!!country_fix)
+GDP$COUNTRY <- recode(GDP$COUNTRY, !!!country_fix)
+gdp_forest$Country.Name <- recode(gdp_forest$Country.Name, !!!country_fix)
+```
+
+Użyjemy teraz stworzonej przez nas funkcji **convert_to_long**, która poprawi wygląd naszych zbiorów danych. To, co chcielibyśmy otrzymać to osobną kolumnę **Year**, w której pojawią się dane z konkretnych lat, i pozostałe kolumny dotyczące odpowiednich wartości, jakie w sobie zawierają. Robimy to po to, żeby osiągnąć układ prostokątny danych.
+
+```{r}
+forest_eu_long <- convert_to_long(forest_eu, "Forest_area")
+GDP_long <- convert_to_long(GDP, "GDP")
+gdp_forest_long <- convert_to_long(gdp_forest, "%GDP")
+```
+
+Łączymy nasze 3 zbiory danych w jeden zbiór **forest_gdp_db** i wyświetlamy 5 pierwszych rekordów.
+
+```{r}
+# left_join() dołącza kolumny z innej tabeli na podstawie wspólnych kluczy, zachowując wszystkie wiersze 
+# z tabeli lewej i wstawiając NA tam, gdzie brak dopasowania.
+forest_gdp_db <- forest_eu_long %>%
+  left_join(GDP_long,        by = c("Country" = "COUNTRY", "Year" = "Year")) %>%
+  left_join(gdp_forest_long, by = c("Country" = "Country.Name", "Year" = "Year"))
+head(forest_gdp_db)
+```
+
+Z wcześniejszej analizy zauważyliśmy braki PKB dla Monako, dlatego korzystając ze strony [IVANSTAT](https://ivanstat.com/en/gdp/mc.html) metodą "cold-deck" dodajemy brakujące dane.
+
+```{r}
+# if_else(condition, wartość_true, wartość_false) - przypisuje wartość tylko dla spełnionego warunku, 
+# w przeciwnym wypadku pozostawia dotychczasową wartość.
+forest_gdp_db <- forest_gdp_db %>%
+  mutate(GDP = if_else(Country == "Monaco" & Year == 1990, 2429/1000, GDP)) %>%
+  mutate(GDP = if_else(Country == "Monaco" & Year == 2000, 2607.2/1000, GDP)) %>%
+  mutate(GDP = if_else(Country == "Monaco" & Year == 2010, 5362.3/1000, GDP)) %>%
+  mutate(GDP = if_else(Country == "Monaco" & Year == 2015, 6259.1/1000, GDP)) %>%
+  mutate(GDP = if_else(Country == "Monaco" & Year == 2020, 6816.2/1000, GDP))
+```
+
+W tym zbiorze pojawia się również problem z brakami danych dla Watykanu, który jest państwem nietypowym pod względem innych państw, ponieważ nie funkcjonuje jak klasyczna gospodarka narodowa ani jednostka terytorialna, co bezpośrednia przekłada się na braki danych statystycznych.
+
+```{r}
+forest_gdp_db[forest_gdp_db$Country == "Holy See", ]
+```
+
+W związku z tym nie byliśmy w stanie znaleźć brakujących wartości, dlatego usuwamy go z naszej bazy danych.
+
+```{r}
+forest_gdp_db <- forest_gdp_db[forest_gdp_db$Country != "Holy See", ] # != - wartość różna
+```
+
+Następnie dodajemy nową kolumnę **EFV** - Economy Forest Value, która odpowiada wartości gospodarki leśnej kraju w PKB. Estymujemy ją jako iloczyn zmiennych **GDP** i **%GDP**/100, wartość będzie podana w miliardach dolarów amerykańskich.
+
+```{r}
+forest_gdp_db$EFV <- forest_gdp_db$GDP * forest_gdp_db$`%GDP` / 100
+```
+
+Po połączeniu powinniśmy również uwzględnić fakt, że zmienna **AFPTLA**, oznaczająca procentowy udział powierzchni leśnej względem lądowej, pochodząca ze zbioru **forest_eu** obliczona była tylko dla roku 2020. Zatem w pozostałe miejsca wpiszemy braki danych.
+
+```{r}
+forest_eu_long[forest_eu_long$Year != 2020, ]$AFPTLA = NA
+```
+
+Możemy uzupełnić brakujące wartości w kolumnie **AFPTLA** metodą "imputacji dedukcyjnej" na podstawie danych z kolumn **Forest_area** - powierzchni lasów i **TLAXX**, czyli całkowitej powierzchni lądowej. W przypadku tej drugiej zmiennej zakładamy, że powierzchnia kraju nie zmieniła się w przeciągu lat 1990-2020. Wstawiamy wartości według równania:
+
+\begin{equation}
+\text{AFPTLA}_{t} = \frac{\text{Forest_area}}{\text{TLAXX}} \cdot 100
+\end{equation}
+
+a jeśli powierzchnia lasów wynosi 0, to udział procentowy też musi wynosić 0.
+
+```{r}
+# dplyr::case_when() – funkcja pozwalająca tworzyć warunkowe przypisania w stylu if-else dla całego wektora
+forest_gdp_db$AFPTLA <- dplyr::case_when(
+  # Reguła 1: jeśli Forest_area == 0, to AFPTLA = 0
+  forest_gdp_db$Forest_area == 0 ~ 0,
+  # Reguła 2: jeśli Forest_area > 0, ale TLAXX == 0, to AFPTLA = NA
+  forest_gdp_db$Forest_area > 0 & forest_gdp_db$TLAXX == 0 ~ NA_real_,
+  # Reguła 3 (domyślna): dla pozostałych przypadków obliczamy udział % powierzchni leśnej
+  TRUE ~ (forest_gdp_db$Forest_area / forest_gdp_db$TLAXX) * 100
+)
+```
+
+Dodatkowo, przy użyciu funkcji **quartile_groups**, którą wcześniej zdefiniowaliśmy, dodamy dwie zmienne jakościowe o skali porządkowej **PRG** - Poziom Rozwinięcia Gospodarczego i **PLAS** - Poziom Lesistości. Tworzymy je na podstawie danych z kolumn odpowiednio **GDP** (PKB) i **AFPTLA** (procentowy udział powierzchni leśnej względem lądowej) w celu pogrupowania danych według kwartyli na 4 kategorie: "bardzo niskie", "niskie", "wysokie", "bardzo wysokie".
+
+```{r}
+forest_gdp_db <- quartile_groups(forest_gdp_db, 
+                                 "GDP", "PRG", c("bardzo niskie", "niskie", "wysokie", "bardzo wysokie"))
+forest_gdp_db <- quartile_groups(forest_gdp_db, 
+                                 "AFPTLA", "PLAS", c("bardzo niskie", "niskie", "wysokie", "bardzo wysokie"))
+```
+
+Sprawdźmy jak prezentują się dane w naszym zbiorze.
+
+```{r}
+summary(forest_gdp_db)
+```
+
+Zmienne opisujące powierzchnię lądową krajów (**TLAXX**) i procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**) wykazują szeroki rozrzut wartości - większość krajów odnotowuje niewielkie zmiany, ale obserwuje się obecność ekstremalnych przypadków intensywnej lesistości. Zmienne jakościowe dotyczące poziomu rozwoju gospodarczego (**PRG**) oraz poziomu lesistości (**PLAS**) mają względnie równomierny rozkład pomiędzy czterema poziomami natężenia, co wskazuje na szerokie spektrum warunków środowiskowych i gospodarczych w analizowanych krajach.
+
+Sprawdźmy, jak wyglądają braki danych:
+
+```{r}
+colSums(is.na(forest_gdp_db[colnames(forest_gdp_db)]))
+```
+
+```{r}
+# aggr() - funkcja z pakietu VIM do wizualizacji braków danych
+aggr(forest_gdp_db, col = c('grey', 'darkgreen'),
+     numbers = TRUE, sortVars = TRUE,
+     labels = names(forest_gdp_db), cex.axis = 0.6, cex.lab = 1.5,
+     gap = 1, ylab = c('Braki', 'Wzór braków'))
+```
+
+W kolumnnach związanych z PKB (**GDP**) i udziałem procentowym gospodarki leśnej w PKB (**%GDP**) braki danych pojawiają się, ponieważ niektóre państwa nie istniały jeszcze w 1990 roku i nie można wtedy odczytać danych związanych z PKB. Zmienne **EFV** (wartość gospodarki leśnej w PKB) i **PRG** (poziom rozwoju gospodarczego) obliczone są na podstawie kolumn PKB (**GDP**) i udziału procentowego gospodarki leśnej w PKB (**%GDP**) stąd również zawierają braki danych z tych samych powodów wymienionych wcześniej. Najwięcej braków występuje w zmiennej dotyczącej wartości gospodarki leśnej w PKB (**EFV**) - 11.3% braków, ponieważ jest sumą obu braków danych dla PKB i udziału procentowego gospodarki leśnej w PKB.
+
+
+# Badanie rozkładów zmiennych
+
+## Badanie rozkładów normalnych
+
+Nie badamy rozkładów zmiennych **Year** (Rok) i **Country** (Państwo), ponieważ mają ona tyle samo wartości dla każdego roku i każdego kraju.
+
+Do badania pozostałych zmiennych użyjemy zdefiniowanej przez nas funkcji **normal_dstr_check**, która tworzy histogram, wykres kwantyl-kwantyl i wykonuje test Shapiro-Wilka dla wybranej zmiennej.
+
+Powierzchnia lądowa (**TLAXX**)
+
+```{r}
+normal_dstr_check(forest_gdp_db, "TLAXX", bins = 50, 
+                  custom_title = "powierzchni lądowej", 
+                  custom_xlab = "Powierzchnia lądowa (tys. ha)")
+```
+
+Na histogramie zauważamy rozkład prawoskośny, a na wykresie kwantyl-kwantyl ciężki prawy ogon. Jednak na obu wykresach widzimy, że prawdopodobnie przez dane dla największego kraju na świecie - Rosji i 9. kraju - Kazachstanu dane o wielkości powierzchni mocno odbiegają od innych krajów. Z tego powodu w celu lepszej wizualizacji pozostałych danych, robimy drugi histogram z wyłączeniem tych państw. 
+
+```{r}
+ggplot(forest_gdp_db, aes(x = TLAXX)) +
+  geom_histogram(
+    bins = 15,
+    fill = "lightgreen",
+    color = "black",
+    na.rm = TRUE
+  ) +
+  lims(x = c(0, 45000)) +
+  labs(
+    title = "Histogram powierzchni lądowej",
+    x = "Powierzchnia lądowa (tys. ha)",
+    y = "Liczebność"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+Na podstawie wykresów widzimy, że powierzchnia lądowa (**TLAXX**) nie ma rozkładu normalnego, rozkład jest prawoskośny. Dodatkowo w teście Shapiro-Wilka otrzymaliśmy wartość p < 0.05, zatem odrzucamy H0, czyli rozkład zmiennej opsiującej powierzchnię lądową (**TLAXX**) najprawdopodobniej nie jest normalny,
+
+Procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**)
+
+```{r}
+normal_dstr_check(forest_gdp_db, "AFPTLA", bins = 10, 
+                  custom_title = "procentowego udziału powierzchni leśnej \n względem lądowej", 
+                  custom_xlab = "Procentowy udział powierzchni leśnej względem lądowej")
+```
+
+Zauważamy, że histogram wygląda jak układ jednomodalny, czyli możliwe, że jest normalny. Na wykresie kwantyl-kwantyl widzimy, że może on być zbliżony do normalnego. W teście Shapiro-Wilka p wartość wyszła mniejsza niż 0.05, zatem odrzucamy H0, czyli zmienna opisująca procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**) najprawdopodobniej nie ma rozkładu normalnego.
+
+Powierzchnia leśna (**Foreast_area**)
+
+```{r}
+normal_dstr_check(forest_gdp_db, "Forest_area", bins = 200, 
+                  custom_title = "powierzchni leśnej", 
+                  custom_xlab = "Powierzchnia leśna (tys. ha)")
+```
+
+Histogram pokazuje, że w naszych danych związanych z powierzchnią lasów najprawdopodobniej występują obserwacje odstające, które znacznie utrudniają nam analizę innych danych. To samo widzimy na wykresie kwantyl-kwantyl, gdzie występuje ciężki prawy ogon. W teście Shapiro-Wilka wartość p wyszła mniejsza niż 0.05, zatem odrzucamy nasze H0, czyli zmienna opisująca powierzchnię lasów (**Forest_area**) najprawdopodobniej nie ma rozkładu normalnego. Tak jak wcześniej w przypadku zmiennej dotyczącej powierzni kraju, tworzymy kolejny histogram, w którym ograniczymy wartości na osi X, żeby wykluczyć obserwacje odstające.
+
+```{r}
+ggplot(forest_gdp_db, aes(x = Forest_area)) +
+  geom_histogram(
+    bins = 10,
+    fill = "lightgreen",
+    color = "black",
+    na.rm = TRUE
+  ) +
+  lims(x = c(0, 30000)) +
+  labs(
+    title = "Histogram powierzchni leśnej",
+    x = "Powierzchnia leśna (tys. ha)",
+    y = "Liczebność"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+Dane na histogramie pokazują rozkład prawoskośny. Widzimy, że dane najprawodpobniej nie mają rozkładu normalnego.
+
+PKB (**GDP**)
+
+```{r}
+normal_dstr_check(forest_gdp_db, "GDP", bins = 25, 
+                  custom_title = "PKB", 
+                  custom_xlab = "Wartość PKB (mld $)")
+```
+
+Zauważamy na histogramie rozkład prawoskośny i potencjalne obserwacje odstające. Na wykresie kwantyl-kwantyl widzimy ciężki prawy ogon oraz lekki lewy. W teście Shapiro-Wilka p wartość wyszła mniejsza niż 0.05, zatem odrzucamy nasze H0, czyli zmienna opisująca PKB (**GDP**) najprawdopodobniej nie ma rozkładu normalnego. Tym razem również wykonamy kolejny histogram z ograniczoną osią X, aby wykluczyć potencjalne obserwacje odstające z wizualizacji.
+
+```{r}
+ggplot(forest_gdp_db, aes(x = GDP)) +
+  geom_histogram(
+    bins = 15,
+    fill = "lightgreen",
+    color = "black",
+    na.rm = TRUE
+  ) +
+  lims(x = c(-100, 2000)) +
+  labs(
+    title = "Histogram PKB",
+    x = "Wartość PKB (mld $)",
+    y = "Liczebność"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+Zauważamy rozkład prawoskośny, występuje dużo mniejszych wartości. Rozkład tej zmiennej najprawdopodobniej nie jest normalny.
+
+Procentowy udział gospodarki leśnej w PKB (**%GDP**)
+
+```{r}
+normal_dstr_check(forest_gdp_db, "%GDP", bins = 25, 
+                  custom_title = "procentowego udziału gospodarki leśnej w PKB", 
+                  custom_xlab = "Procentowy udział gospodarki leśnej w PKB")
+```
+
+Tutaj podobna sytuacja jak w przypadku PKB (**GDP**), mianowicie zauważamy na histogramie rozkład prawoskośny i potencjalne obserwacje odstające. Na wykresie kwantyl-kwantyl widzimy ciężki prawy ogon i lekki lewy. W teście Shapiro-Wilka p wartość wyszła mniejsza niż 0.05, zatem odrzucamy nasze H0, czyli procentowy udział gospodarki leśnej w PKB (**%GDP**) najprawdopodobniej nie ma rozkładu normalnego. Jednak również wykonamy kolejny histogram ze zmniejszoną osią X, żeby upewnić się, że zmienna nie ma rozkładu normalnego.
+
+```{r}
+ggplot(forest_gdp_db, aes(x = `%GDP`)) +
+  geom_histogram(
+    bins = 15,
+    fill = "lightgreen",
+    color = "black",
+    na.rm = TRUE
+  ) +
+  lims(x = c(-0.05, 1.7)) +
+  labs(
+    title = "Histogram procentowego udziału gospodarki leśnej w PKB",
+    x = "Procentowy udział gospodarki leśnej w PKB",
+    y = "Liczebność"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+Po wykluczeniu obserwacji odstających, histogram dalej wykazuje rozkład prawoskośny, zatem zmienna najprawdopodobniej nie ma rozkładu normalnego.
+
+Wartość gospodarki leśnej w PKB (**EFV**)
+
+```{r}
+normal_dstr_check(forest_gdp_db, 'EFV', bins = 25, 
+                  custom_title = "wartości gospodarki leśnej w PKB", 
+                  custom_xlab = "Wartość gospodarki leśnej w PKB (mld $)")
+```
+
+Tutaj znowu podobna sytuacja jak w przypadku PKB (**GDP**), co jest logiczne, ponieważ wartość gospodarki leśnej w PKB (**EFV**) jest wyliczona na podstawie między innymi PKB (**GDP**). Zauważamy na histogramie rozkład prawoskośny i potencjalne obserwacje odstające. Na wykresie kwantyl-kwantyl widzimy ciężki prawy ogon. W teście Shapiro-Wilka p wartość wyszła mniejsza niż 0.05, zatem odrzucamy nasze H0, czyli zmienna opisująca wartość gospodarki leśnej w PKB (**EFV**) najprawdopodobniej nie ma rozkładu normalnego. Wykonamy również histogram z ograniczoną osią X, aby przeanalizować wykres bez potencjalnych obserwacji odstających.
+
+```{r}
+ggplot(forest_gdp_db, aes(x = EFV)) +
+  geom_histogram(
+    bins = 12,
+    fill = "lightgreen",
+    color = "black",
+    na.rm = TRUE
+  ) +
+  lims(x = c(-0.02, 2)) +
+  labs(
+    title = "Histogram wartości gospodarki leśnej w PKB",
+    x = "Wartość gospodarki leśnej w PKB (mld $)",
+    y = "Liczebność"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+
+Widzimy dalej rozkład prawoskośny, zatem zmienna opisująca wartość gospodarki leśnej w PKB (**EFV**) najprawdopodbniej nie ma rozkładu normalnego.
+
+
+## Badanie rozkładów log-normalnych
+
+Skoro nasze zmienne najprawodpodobniej nie mają rozkładu normalnego (zazwyczaj są prawostronnie skośne), sprawdzimy teraz czy może nie mają rozkładu log-normalnego za pomocą zdefiniowanej przez nas funkcji **normal_log_dstr_check**.
+
+Powierzchnia lądowa po logarytmizacji (log**TLAXX**)
+
+```{r}
+normal_log_dstr_check(forest_gdp_db, "TLAXX", bins = 15, 
+                      custom_title = "powierzchni lądowej", 
+                      custom_xlab = "Powierzchnia lądowa (tys. ha)")
+```
+
+Histogram powierzchni lądowej (**TLAXX**) po logarytmizacji wygląda znacznie lepiej, jednak na wykresie kwantyl-kwantyl dalej zauważamy ciężki lewy i prawy ogon, a w teście Shapiro-Wilka dostajemy p wartość mniejszą niż 0.05, zatem odrzucamy H0, czyli zmienna opisująca powierzchnię lądową po logarytmizacji (log**TLAXX**) najprawdopodobniej dalej nie ma rozkładu normalnego.
+
+Procentowy udział powierzchni leśnej względem lądowej po logarytmizacji (log**AFPTLA**)
+
+```{r}
+normal_log_dstr_check(forest_gdp_db, "AFPTLA", bins = 12, 
+                      custom_title = "procentowego udziału powierzchni leśnej względem lądowej \n", 
+                      custom_xlab = "Procentowy udział powierzchni leśnej względem lądowej")
+```
+
+Na histogramie zauważamy tym razem rozkład lewoskośny, wykres kwantyl-kwantyl pokazuje ciężki lewy ogon, a z testu Shapiro-Wilka dostajemy p wartość mniejsza niż 0.05, zatem odrzucamy H0, czyli zmienna opisująca procentowy udział powierzchni leśnej względem lądowej po logarytmizacji (log**AFPTLA**) najprawdopodobniej nie ma rozkładu normalnego.
+
+Powierzchnia leśna po logarytmizacji (log**Forest_area**)
+
+```{r}
+normal_log_dstr_check(forest_gdp_db, "Forest_area", bins = 15, 
+                      custom_title = "powierzchni leśnej", 
+                      custom_xlab = "Powierzchnia leśna (tys. ha)")
+```
+
+Na histogramie zauważamy dużo wartości w centrum wykresu i niewiele wartości po bokach. Z wykresu kwantyl-kwantyl widzimy, że występuje ciężki lewy ogon, a w teście Shapiro-Wilka otrzymujemy p wartość mniejszą niż 0.05, zatem odrzucamy H0, czyli zmienna opisująca powierzchnię lądową po logarytmizacji (log**Forest_area**) najprawdopodobniej nie ma rozkładu normalnego.
+
+PKB po logarytmizacji (log**GDP**)
+
+```{r}
+normal_log_dstr_check(forest_gdp_db,"GDP", bins = 9, 
+                      custom_title = "PKB", 
+                      custom_xlab = "Wartość PKB (mld $)")
+```
+
+Dla PKB po logarytmizacji (log**GDP**) otrzymaliśmy histogram, który wyglądem może przypominać rozkład normalny. Dodatkowo na wykresie kwantyl-kwantyl zauważamy, że tylko niektóre wartości odstają od czerwonej linii, szczególnie w lewym ogonie. Jednak z testu Shapiro-Wilka wciąż otrzymujemy p wartość mniejszą niż 0.05, zatem odrzucamy H0, czyli zmienna opsiująca PKB po logarytmizacji (log**GDP**) najprawdopodobniej dalej nie ma rozkładu normalnego.
+
+Procentowy udział gospodarki leśnej w PKB po logarytmizacji (log**%GDP**)
+
+```{r}
+normal_log_dstr_check(forest_gdp_db, "%GDP", bins = 10, 
+                      custom_title = "procentowego udziału gospodarki leśnej w PKB \n", 
+                      custom_xlab = "Procentowy udział gospodarki leśnej w PKB")
+```
+
+Bardzo podobną sytuację mamy dla procentowego udział gospodarki leśnej w PKB po logarytmizacji (log**%GDP**), jednak i w tym przypadku w teście Shapiro-Wilka otrzymujemy p wartość mniejszą niż 0.05, zatem odrzucamy H0, czyli zmienna opisująca procentowy udział gospodarki leśnej w PKB po logarytmizacji (log**%GDP**) najprawdopodobniej dalej nie ma rozkładu normalnego.
+
+Wartość gospodarki leśnej w PKB po logarytmizacji (log**EFV**)
+
+```{r}
+normal_log_dstr_check(forest_gdp_db, "EFV", bins = 15, 
+                      custom_title = "wartości gospodarki leśnej w PKB \n", 
+                      custom_xlab = "Wartość gospodarki leśnej w PKB (mld $)")
+```
+
+W przypadku wartości gospodarki leśnej w PKB po logarytmizacji (log**EFV**) na histogramie zauważamy rozkład lewoskośny, a na wykresie kwantyl-kwantyl widzimy ciężki lewy ogon. W teście Shapiro-Wilka otrzymaliśmy p wartość mniejszą niż 0.05, zatem odrzucamy H0, czyli zmienna opisująca wartość gospodarki leśnej w PKB po logarytmizacji (log**EFV**) najprawdopodobniej dalej nie ma rozkładu normalnego.
+
+Podsumowując, mimo wykonania logarytmizacji naszych zmiennych, żadna z nich najprawdopodobniej nie posiada rozkładu normalnego. Logarytmowanie zmniejszyło rozrzut danych i spłaszczyło ogony rozkładów, ale nie doprowadziło do normalności. Można więc rozważyć dalsze przekształcenia lub stosowanie metod statystycznych niewymagających normalności.
+
+
+# Badanie zależności między zmiennymi
+
+## Analiza graficzna korelacji
+
+Za pomocą heatmapy, gdzie kolory i wielkość kół wskazują zarówno kierunek, jak i siłę zależności oraz analizy macierzy wykresów par zmiennych (ggpairs) sprawdzimy czy nasze zmienne ilościowe mogą w jakimś stopniu od siebie zależeć.
+
+```{r}
+# select_if() filtruje kolumny spełniające warunek is.numeric
+num_vars <- select_if(forest_gdp_db, is.numeric)
+
+# cor() wyznacza współczynniki korelacji Pearsona
+# use = "complete.obs" oznacza, że do obliczeń używane są tylko obserwacje bez braków danych
+cor_matrix <- cor(num_vars, use = "complete.obs")
+
+# corrplot() tworzy graficzną reprezentację zależności między zmiennymi
+corrplot::corrplot(
+  cor_matrix,
+  order = "hclust",            # porządkowanie zmiennych na podstawie hierarchicznej analizy skupień
+  addCoef.col = "black",       # dodanie wartości współczynników korelacji w kolorze czarnym
+  col = corrplot::COL2("PiYG"),# paleta kolorów
+  tl.cex = 0.75,               # rozmiar czcionki etykiet zmiennych
+  tl.col = "darkgreen"         # kolor etykiet zmiennych
+)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# operator |> przekazuje wynik do kolejnej funkcji
+# ggpairs() (pakiet GGally) tworzy macierz wykresów:
+# - na przekątnej: rozkłady pojedynczych zmiennych
+# - poza przekątną: wykresy rozrzutu dla par zmiennych
+# - dodatkowo: współczynniki korelacji między zmiennymi
+ggpairs(forest_gdp_db |> select(-Country, -PRG, -PLAS))
+```
+
+Istotne korelacje:
+(-) - oznacza, że współczynnik korelacji jest ujemny
+
+**Silne korelacje (> 0.5):**
+
+*Forest_area* -> *TLAXX*
+
+*EFV* -> *TLAXX*
+
+*EFV* -> *Forest_area*
+
+Korelacje między tymi zmiennymi przekraczają 0.85, co sugeruje, że rosną one razem. Może to wskazywać, że państwa o większej powierzchni lasów jednocześnie generują wyższe wartości gospodarcze powiązane z sektorem leśnym.
+
+**Umiarkowane korelacje (0.25 - 0.5):**
+
+*%GDP* -> *AFPTLA*
+
+*EFV* -> *AFPTLA*
+
+*EFV* -> *GDP*
+
+Procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**) i procentowy udział gospodarki leśnej w PKB (**%GDP**) są umiarkowanie skorelowane. Może to oznaczać, że kraje z większą powierzchnią lasów mają również większy udział sektora leśnego w PKB. Korelacje między wartością gospodarki leśnej w PKB (**EFV**) a PKB (**GDP**) są dodatnie, ale umiarkowane, co sugeruje, że wydajność gospodarcza związana z lasami wzrasta wraz z ogólnym poziomem PKB, choć nie jest to zależność bardzo silna. 
+
+**Słabe korelacje (< 0.25):**
+
+*%GDP* -> *GDP* (-)
+
+*GDP* -> *TLAXX*
+
+*Forest_area* -> *AFPTLA*
+
+*GDP* -> *Forest_area*
+
+Uzyskane wartości współczynników korelacji wskazują na słabe związki liniowe pomiędzy analizowanymi zmiennymi. Oznacza to, że zmiany jednej zmiennej nie są w istotnym stopniu powiązane ze zmianami drugiej, a ewentualne zależności mają charakter marginalny. 
+Rok (**Year**) nie koreluje z innymi zmiennymi. To oznacza brak wyraźnych trendów czasowych w całym zbiorze.
+
+## Test ANOVA
+
+Przejdziemy teraz do wykonania testu ANOVA, który sprawdzi zależności między konkretnymi zmiennymi jakościowymi ze wszystkimi zmiennymi ilościowymi. Użyjemy do tego funkcji **anova_results**, która została przez nas wcześniej zdefiniowana, dzięki niej poznamy wartość p oraz czy jest to istotna statystycznie różnica średnich.
+
+Państwa (**Country**)
+
+```{r}
+anova_results <- anova_table(forest_gdp_db, "Country")
+print(anova_results)
+```
+
+Z wyników testu ANOVA dla zmiennej zawierającej nazwy państw (**Country**) zauważamy, że większość analizowanych zmiennych ilościowych różni się istotnie między krajami europejskimi. Wszystkie zmienne oprócz Roku (**Year**) uzyskały bardzo niską p wartość, co oznacza, że ich średnie wartości są zależne od kraju. Wskazuje to na duże zróżnicowanie między państwami w zakresie gospodarki leśnej oraz powiązanych wskaźników ekonomicznych. Jedyną zmienną, która nie wykazała różnic między krajami, jest Rok (**Year**) (p wartość = 1.00), co jest zgodne z naszymi oczekiwaniami, ponieważ wszystkie państwa posiadają te same lata pomiarowe. Ogólnie wyniki potwierdzają, że dane są silnie zróżnicowane, a analiza porównawcza między krajami jest uzasadniona i statystycznie istotna.
+
+Poziom rozwoju gospodarczego (**PRG**)
+
+```{r message=FALSE}
+anova_results <- anova_table(forest_gdp_db, "PRG")
+print(anova_results)
+```
+
+Test ANOVA przeprowadzony dla zmiennej jakościowej opisującej poziom rozwoju gospodarczego (**PRG**) pokazał, że tylko część analizowanych zmiennych ilościowych różni się istotnie pomiędzy poziomami tej kategorii. Istotne statystycznie różnice, czyli takie gdzie p wartość jest mniejsze niż 0.05 zaobserwowaliśmy dla prawie wszystkich zmiennych. Oznacza to, że poziomy rozwoju gospodarczego są związane z różnicami wartości gospodarki leśnej oraz wpływie sektora leśnego na PKB, co jest zgodne z naszymi oczekiwaniami, ponieważ ta zmienna jest określona na podstawie PKB (**GDP**). Z kolei procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**) oraz rok (**Year**) nie wykazały istotnych różnic, co sugeruje, że poziomy rozwoju gospodarczego (**PRG**) nie wpływają znacząco na procentową powierzchnię lasów ani na rozkład danych w czasie. Ogólnie wyniki wskazują, że poziom rozwoju gospodarczego (**PRG**) różnicuje głównie zmienne związane z ekonomicznymi aspektami gospodarki leśnej, natomiast nie ma wyraźnego związku z miarami strukturalnymi czy czasowymi.
+
+Poziom lesistości (**PLAS**)
+
+```{r}
+anova_results <- anova_table(forest_gdp_db, "PLAS")
+print(anova_results)
+```
+
+Test ANOVA przeprowadzony dla zmiennej jakościowej opisującej poziom lesistości (**PLAS**) pokazał, że większość analizowanych zmiennych ilościowych różni się istotnie między poziomami tej kategorii. Oznacza to, że poziomy lesistości (**PLAS**) są powiązane z wyraźnymi różnicami zarówno w zasobach leśnych, jak i w ekonomicznych aspektach gospodarki leśnej. Brak istotnych zależności dotyczy zmiennej rok (**Year**) oraz PKB (**GDP**), dla których p wartość jest wyższa niż 0.05. Sugeruje to, że poziomy lesistości (**PLAS**) nie wpływają na rozkład lat występowania danych oraz poziom PKB. Ogólnie wyniki wskazują, że poziom lesistości (**PLAS**) różnicuje przede wszystkim zmienne związane z intensywnością i wartością gospodarki leśnej, natomiast nie ma znaczącego związku z dynamiką czasową.
+
+## Test Chi-kwadrat
+
+Za pomocą testu Chi-kwadrat sprawdzimy wzajemną zależność między zmiennymi jakościowymi.
+
+```{r}
+cat_vars <- c("Country", "PRG", "PLAS") # Lista zmiennych jakościowych
+
+alpha <- 0.05 # Poziom istotności
+
+# Tworzymy pustą ramkę
+results <- data.frame(
+  var1 = character(),
+  var2 = character(),
+  p_value = numeric(),
+  significant = logical(),
+  stringsAsFactors = FALSE
+)
+
+# Iteracja
+for (i in 1:(length(cat_vars)-1)) {
+  for (j in (i+1):length(cat_vars)) {
+    
+    # usuwamy NA
+    tmp <- forest_gdp_db[, c(cat_vars[i], cat_vars[j])]
+    tmp <- tmp[complete.cases(tmp), ]
+    
+    # Tworzymy tabelę przestawną
+    tbl <- table(tmp[[1]], tmp[[2]])
+    
+    # Test chi-kwadrat (symulacja p-value jeśli małe liczebności)
+    test <- chisq.test(tbl, simulate.p.value = TRUE)
+    
+    # Dodanie wyniku
+    results <- rbind(results, data.frame(
+      var1 = cat_vars[i],
+      var2 = cat_vars[j],
+      p_value = test$p.value,
+      significant = test$p.value < alpha
+    ))
+  }
+}
+
+results
+```
+
+Test Chi-kwadrat we wszystkich trzech porównaniach uzyskał bardzo niskie p wartości, co oznacza, że zależności są statystycznie istotne. Oznacza to, że rozkłady zmiennych opisujących poziom rozwoju gospodarczego (**PRG**) oraz poziom lesistości (**PLAS**) różnią się pomiędzy krajami, a także że same te zmienne nie są od siebie niezależne. Innymi słowy, poziomy tych zmiennych współwystępują w sposób nieprzypadkowy: kraj, w którym znajduje się dany obserwowany poziom rozwoju gospodarczego (**PRG**), ma również większe prawdopodobieństwo określonego poziomu lesistości (**PLAS**), i odwrotnie. Wyniki te wskazują, że zmienne jakościowe opisujące charakterystykę gospodarowania zasobami leśnymi nie są niezależne ani od siebie, ani od kraju.
+
+## Współczynnik V Cramera i Spearmana
+
+Współczynnik V Cramera mierzy siłę zależności między dwiema zmiennymi jakościowymi, gdzie wartość 0 oznacza brak zależności, a 1 - pełną zależność. Współczynnik Spearmana mierzy korelację między dwiema zmiennymi porządkowymi, gdzie wartość -1 oznacza pełną ujemną korelację, a 1 - pełną dodatnią korelację. Dla zmiennych jakościowych użyjemy współczynnika V Cramera, a dodatkowo dla zmiennych o skali porządkowej wykonamy test korelacji rang Spearmana.
+
+Państwo (**Country**) i Poziom rozwoju gospodarczego (**PRG**)
+
+```{r}
+# wybór dwóch zmiennych
+tmp <- forest_gdp_db[, c("Country", "PRG")]
+
+# usuwanie NA
+tmp <- tmp[complete.cases(tmp), ]
+
+# tabela częstości
+tbl <- table(tmp$Country, tmp$PRG)
+
+# Cramer V
+cramers_v <- cramerV(tbl, bias.correct = TRUE)
+cat("V Cramer dla Państwa i Poziomu rozwoju gospodarczego: ", cramers_v[1], "\n")
+```
+
+Wartość współczynnika V Cramera = 0.6737 jest wysoka, co sugeruje, że między poziomem rozwoju gospodarczego (**PRG**) a krajem (**Country**) jest silna zależność.
+
+Państwo (**Country**) i Poziom lesistości (**PLAS**)
+
+```{r}
+# wybór dwóch zmiennych
+tmp <- forest_gdp_db[, c("Country", "PLAS")]
+
+# usuwanie NA
+tmp <- tmp[complete.cases(tmp), ]
+
+# tabela częstości
+tbl <- table(tmp$Country, tmp$PLAS)
+
+# Cramer V
+cramers_v <- cramerV(tbl, bias.correct = TRUE)
+cat("V Cramer dla Państwa i Poziomu lesistości: ", cramers_v[1], "\n")
+```
+
+Wartość współczynnika V Cramera = 0.8372 jest wysoka, co sugeruje, że między poziomem lesistości (**PLAS**) a krajem (**Country**) jest silna zależność.
+
+Poziom lesistości (**PLAS**) i poziom rozwoju gospodarczego (**PRG**)
+
+```{r}
+# wybór dwóch zmiennych
+tmp <- forest_gdp_db[, c("PLAS", "PRG")]
+
+# usuwanie NA
+tmp <- tmp[complete.cases(tmp), ]
+
+# tabela częstości
+tbl <- table(tmp$PLAS, tmp$PRG)
+
+# Cramer V
+cramers_v <- cramerV(tbl, bias.correct = TRUE)
+
+# Spearman (dla porządkowych)
+# trzeba zamienić kategorie na liczby
+spearman_corr <- cor(
+  as.numeric(tmp$PLAS),
+  as.numeric(tmp$PRG),
+  method = "spearman"
+)
+
+cat("V Cramer dla Poziomu lesistości i rozwoju gospodarczego: ", cramers_v[1], "\n")
+cat("Spearman dla Poziomu lesistości i rozwoju gospodarczego: ", spearman_corr)
+```
+
+Wartość współczynnika V Cramera = 0.1588 jest niska, co sugeruje, że związek między poziomem lesistości (**PLAS**) a poziomem rozwoju gospodarczego (**PRG**) jest słaby.
+
+Wynik współczynnika Spearmana = -0.0533 oznacza, że praktycznie nie ma liniowego ani monotonicznego związku między poziomem lesistości a poziomem rozwoju gospodarczego.
+
+Na podstawie tych danych poziom lesistości kraju jest słabo powiązany z jego poziomem rozwoju gospodarczego.
+
+
+# Przykładowe wykresy pomiędzy zmiennymi
+
+Przeprowadzimy teraz wizualizację niektórych zależności z naszego zbioru, sugerowaliśmy się poziomem korelacji, dlatego zaczynamy od zmiennych, które wcześniej wyszły nam silnie od siebie zależne.
+
+**Forest_area** -> **TLAXX**
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db, aes(x = TLAXX, y = Forest_area)) +
+  geom_point() + # rysuje wykres punktowy
+  # rysuje linię trendu dopasowaną metodą regresji liniowej (lm)
+  geom_smooth(method = "lm", col = 'forestgreen', na.rm = T) +
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Powierzchnia lasów (tys. ha)") +
+  ggtitle("Zależność między powierzchnią lądową państwa a powierzchnią lasów") +
+  theme(plot.title = element_text(hjust = 0.5)) # umieszcza tytuł wykresu na środku
+```
+
+Sprawdziliśmy zależności między powierzchnią lądową (**TLAXX**) a powierzchnią leśną (**Forest_area**) i zauważamy bardzo duże obserwacje odstające, które przeszkadzają nam w badaniu. Skoro porównujemy dane związane z powierzchnią państwa, podejrzewamy, że tą obserwacją może być największe państwo na świecie, czyli Rosja, zatem wykonajmy wykres bez Rosji.
+
+```{r message=FALSE}
+ggplot(forest_gdp_db[forest_gdp_db$Country != "Russian Federation",], aes(x = TLAXX, y = Forest_area)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = 'forestgreen', na.rm = T) + 
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Powierzchnia lasów (tys. ha)") +
+  ggtitle("Zależność między powierzchnią lądową państwa \n a powierzchnią lasów bez Rosji") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Widzimy delikatną poprawę, ale zauważamy kolejną obserwację odstającą, czyli prawdopodobnie w naszych danych będzie to kolejne duże państwo, mianowicie Kazachstan, zatem wykonajmy wykres jeszcze raz, tym razem bez Rosji i Kazachstanu. Dodatkowo sprawdzamy jak rozkładają się dane pod względem poziomu lesistości (**PLAS**) i poziomu rozwoju gospodarczego (**PRG**).
+
+```{r message=FALSE}
+ggplot(forest_gdp_db[forest_gdp_db$Country != "Russian Federation" & forest_gdp_db$Country != "Kazakhstan",], 
+       aes(TLAXX, Forest_area)) +
+  geom_point(aes(col = PRG, shape = PLAS), size = 2) +
+  geom_smooth(method = "lm", col = 'forestgreen', na.rm = T) + 
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Powierzchnia lasów (tys. ha)") + 
+  ggtitle("Zależność między powierzchnią lądową państwa a powierzchnią \n lasów bez Rosji i Kazachstanu") +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  labs(color = "Poziom rozwoju \ngospodarczego", shape = "Poziom lesistości")
+```
+
+Widzimy, że bez Rosji i Kazachstanu wykres wygląda znacząco lepiej, zatem Rosja i Kazachstan są potencjalnymi obserwacji odstającymi. Widzimy również, że kraje o wysokim poziomie PKB mają raczej większą powierzchnię lądową. Co ciekawe widzimy, że państwa o dużej powierzchni lądowej mają raczej niski procent powierzchni leśnej.
+
+**EFV** -> **TLAXX**
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db, aes(x = TLAXX, y = EFV)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = T) + 
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Wartość gospodarki leśnej w PKB (mld $)") +
+  ggtitle("Zależność między powierzchnią lądową państwa a wartością gospodarki leśnej") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+W przypadku wartości gospodarki leśnej w PKB (**EFV**) i powierzchni lądowej (**TLAXX**) znowu widzimy potencjalne obserwacje odstające, na podstawie wcześniejszej analizy domyślamy się, że jest to Rosja oraz Kazachstan, zatem wykonamy wykres bez tych państw i dodatkowo przeanalizujemy nasze wyniki pod względem poziomu lesistości (**PLAS**) i poziomu rozwoju gospodarczego (**PRG**).
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db[forest_gdp_db$Country != "Russian Federation" & forest_gdp_db$Country != "Kazakhstan", ], 
+       aes(TLAXX, EFV)) +
+  geom_point(aes(col = PRG, shape = PLAS), size = 2) +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = T) +
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Wartość gospodarki leśnej w PKB (mld $)") +
+  ggtitle("Zależność między powierzchnią lądową państwa a wartością \n gospodarki leśnej bez Rosji i Kazachstanu")  +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  labs(color = "Poziom rozwoju \ngospodarczego", shape = "Poziom lesistości")
+```
+
+Widzimy, że zdecydowanie nie mamy tutaj zależności liniowej. Dzięki wprowadzeniu dodatkowych zmiennych do wykresu zauważamy, że państwa o większej powierzchni lądowej mają również wyższy poziom rozwoju gospodarczego, ale niekoniecznie wysoki procent powierzchni leśnej. Z kolei państwa o wysokiej wartości godpsodarki leśnej w PKB (**EFV**) mają także wysoki procent powierzchni leśnej i bardzo wysoki poziom gospodarczy.
+
+**EFV** -> **Forest_area**
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db, aes(x = Forest_area, y = EFV)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = TRUE) + 
+  xlab("Powierzchnia leśna (tys. ha)") + ylab("Wartość gospodarki leśnej w PKB (mld $)") +
+  ggtitle("Zależność między powierzchnią leśną a wartością gospodarki leśnej")  +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Ponownie widzimy potencjalne obserwacje odstające utrudniające analizę, zatem wykonajmy wykres jeszcze raz, ale bez Rosji, która ma stosunkowo dużą powierzchnię leśną i dodatkowo przeanalizujemy nasze wyniki pod względem poziomu lesistości (**PLAS**) i poziomu rozwoju gospodarczego (**PRG**).
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db[forest_gdp_db$Country != "Russian Federation", ], aes(x = Forest_area, y = EFV)) +
+  geom_point(aes(col = PRG, shape = PLAS), size = 2) +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = TRUE) +
+  xlab("Powierzchnia leśna (tys. ha)") + ylab("Wartość gospodarki leśnej w PKB (mld $)") +
+  ggtitle("Zależność między powierzchnią lasów a wartością \n gospodarki leśnej bez Rosji") +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  labs(color = "Poziom rozwoju \ngospodarczego", shape = "Poziom lesistości")
+```
+
+Widzimy, że między powierzchnią leśną (**Forest_area**) a wartością gospodarki leśnej w PKB (**EFV**) nie ma zależności liniowej. Państwa o największej powierzchni leśnej mają wysoki lub bardzo wysoki poziom PKB oraz wysoki procentowy udział lasów. Państwa o małej powierzchni leśnej mają niskie PKB i niewielką procentową powierzchnię lasów.
+
+
+Przechodzimy teraz do analizy zmiennych umiarkowanie od siebie zależnych.
+
+**%GDP** -> **AFPTLA**
+
+```{r message=FALSE, warning=FALSE}
+kwartyle_AFPTLA <- c(
+  quantile(forest_gdp_db$AFPTLA, 0.25, na.rm = TRUE),
+  quantile(forest_gdp_db$AFPTLA, 0.5, na.rm = TRUE),
+  quantile(forest_gdp_db$AFPTLA, 0.75, na.rm = TRUE)
+)
+
+ggplot(forest_gdp_db, aes(x = `AFPTLA`, y = `%GDP`)) +
+  # dodaje linie reprezentujące kwartyle
+  geom_vline(xintercept = kwartyle_AFPTLA, color = "magenta", linetype = "dashed") +
+  geom_point(aes(col = PRG), size = 2) +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = TRUE) + 
+  xlab("Procentowy udział powierzchni leśnej względem lądowej") + 
+  ylab("Udział procentowy gospodarki leśnej w PKB") +
+  ggtitle("Zależność między procentową powierzchnią lasów a udziałem \n procentowym gospodarki leśnej w PKB") +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  labs(color = "Poziom rozwoju \ngospodarczego")
+```
+
+Mamy duży rozrzut punktów, dlatego dopasowanie liniowe nie jest tutaj dobrym pomysłem. Nie ma też wyraźnej zależności pomiędzy procentowym udziałem powierzchni leśnej a poziomem PKB kraju. Pionowymi liniami zaznaczone zostały kwartyle Q1, Q2 i Q3 dla procentowego udziału powierzchni leśnej względem lądowej (**AFPTLA**). Pomiędzy 20% a 40% powierzchni leśnej znajduje się 50% wszystkich danych.
+
+Sprawdźmy również zależności między zmiennymi o słabej korelacji.
+
+**%GDP** -> **GDP** (-)
+
+```{r message=FALSE, warning=FALSE}
+kwartyle_GDP <- c(
+  quantile(forest_gdp_db$GDP, 0.25, na.rm = TRUE),
+  quantile(forest_gdp_db$GDP, 0.5, na.rm = TRUE),
+  quantile(forest_gdp_db$GDP, 0.75, na.rm = TRUE)
+)
+ggplot(forest_gdp_db, aes(x = `GDP`, y = `%GDP`)) +
+  geom_vline(xintercept = kwartyle_GDP, col = "blueviolet", linetype = "dashed") +
+  geom_point(aes(shape = PLAS), size = 2) +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = TRUE) +
+  xlab("Wartość PKB (mld $)") + ylab("Udział procentowy gospodarki leśnej w PKB") +
+  ggtitle("Zależność między wartością PKB, a procentowym udziałem \n gospodarki leśnej w PKB") +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  labs(shape = "Poziom lesistości")
+```
+
+Widzimy, że model liniowy nie jest najlepszy, można się zastanowić nad modelem hiperbolicznym, czy też wykładniczym, ponieważ wiemy, że procentowy udział gospodarki leśnej w PKB (**%GDP**) nie może być ujemny. Dodatkowo możemy zauważyć, że bardzo dużo państw ma niski procentowy udział PKB gospodarki leśnej w ogólnym poziomie PKB. Pionowe linie reprezentują kwartyle: Q1, Q2, Q3 wartości PKB, czyli ponad 75% obserwacji ma wartość PKB mniejszą niż 500 mld $.
+
+**GDP** -> **TLAXX**
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db, aes(x = `TLAXX`, y = `GDP`)) +
+  geom_point() +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = TRUE) + 
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Wartość PKB (mld $)") + 
+  ggtitle("Zależność między powierzchnią państwa a wartością PKB") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Widzimy obserwacje odstające, skoro badamy powierzchnię lądową państw, domyślamy się, że tymi obserwacjami są prawdopodobnie Rosja i Kazachstan, dlatego rysujemy wykres bez nich. Dodatkowo poziomymi liniami zaznaczymy kwartyle Q1, Q2 i Q3 dla PKB (**GDP**) i zbadamy też poziom lesistości państw.
+
+```{r message=FALSE, warning=FALSE}
+ggplot(forest_gdp_db[forest_gdp_db$Country != "Russian Federation" & forest_gdp_db$Country != "Kazakhstan", ], 
+       aes(TLAXX, GDP)) +
+  geom_hline(yintercept = kwartyle_GDP, col = "blueviolet", linetype = "dashed" ) +
+  geom_point(aes(shape = PLAS), size = 2) +
+  geom_smooth(method = "lm", col = "forestgreen", na.rm = T) +
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Wartość PKB (mld $)") +
+  ggtitle("Zależność między powierzchnią lądową państwa a wartością PKB \n bez Rosji i Kazachstanu") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(shape = "Poziom lesistości")
+```
+
+Wraz ze wzrostem powierzchni państwa widzimy, że wzrasta PKB. Państwa o dużej powierzchni lądowej mają raczej niski procent powierzchni leśnej. Większość państw ma małą powierzchnię lądową i niski poziom PKB. Poziome linie reprezentują kwartyle: Q1, Q2, Q3 wartości PKB, czyli ponad 75% obserwacji ma wartość PKB mniejszą niż 500 mld $.
+
+Wyróżnimy teraz 5 państw europejskich - Niemcy, Polskę, Francję, Włochy i Austrię, aby sprawdzić, gdzie znajdują się na naszym wykresie porównującym powierzchnię lądową państwa z wartością PKB. Z wykresu wykluczone zostały Rosja i Kazachstan, żeby nie utrudniały analizy wizualizacji. 
+
+```{r message=FALSE, warning=FALSE}
+highlight <- c("Germany", "Poland", "France", "Italy", "Austria")
+
+df_plot <- forest_gdp_db %>%
+  filter(Country != "Russian Federation",
+         Country != "Kazakhstan") %>%
+  mutate(highlight_country = ifelse(Country %in% highlight, Country, "Other"))
+
+ggplot(df_plot, aes(TLAXX, GDP, color = highlight_country)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", color = "black", na.rm = T) +
+  scale_color_manual(values = c(
+    "Germany" = "blue",
+    "Poland" = "red",
+    "France" = "darkgreen",
+    "Italy" = "purple",
+    "Austria" = "orange",
+    "Other" = "grey70"
+  ), 
+  labels = c(
+    "Germany" = "Niemcy",
+    "Poland" = "Polska",
+    "France" = "Francja",
+    "Italy" = "Włochy",
+    "Austria" = "Austria",
+    "Other" = "Pozostałe"
+    )) +
+  labs(color = "Państwo") +
+  xlab("Powierzchnia lądowa (tys. ha)") + ylab("Wartość PKB (mld $)") +
+  ggtitle("Zależność między powierzchnią lądową państwa a PKB \n bez Rosji i Kazachstanu") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Niemcy charakteryzują się wysokim PKB przy umiarkowanej powierzchni, wyraźnie odstając w górę względem większości krajów. Potwierdza to bardzo wysoki poziom rozwoju gospodarczego niezależny od wielkości terytorium. Z kolei Francja łączy relatywnie dużą skalę terytorialną z silną gospodarką. Włochy osiągają wysokie PKB mimo mniejszej powierzchni niż Francja czy Niemcy, co wskazuje na wysoką intensywność gospodarczą i efektywność ekonomiczną. Austria ma niewielką powierzchnię i niższe PKB, jednak wciąż wypada lepiej niż wiele krajów o podobnej skali terytorialnej, co sugeruje stabilny, choć mniejszy potencjał gospodarczy. Za to Polska zajmuje pozycję pośrednią - przy średniej powierzchni osiąga umiarkowane wartości PKB, wyraźnie niższe niż największe gospodarki Europy Zachodniej.
+
+
+# Analiza obserwacji odstających
+
+Do analizy obserwacji odstających skorzystamy z Reguły Tukeya, która definiuje obserwację nietypową, gdy jest mniejsza od pierwszego kwartyla o więcej niż k wielokrotności rozstępu kwartylowego lub większa od trzeciego kwartyla o więcej niż k wielokrotności rozstępu kwartylowego. W przypadku tego zbioru danych nie możemy skorzystać z innych metod analizy obserwacji odstających, ponieważ nasze zmienne nie mają rozkładów normalnych ani log-normalnych oraz mamy wiele braków danych. 
+
+Analiza obserwacji odstających zostanie przeprowadzona przy użyciu wcześniej zdefiniowanej przez nas funkcji **boxplot_outliers**, która rysuje wykres pudełkowy oraz zaznacza na nim obserwacje odstające, a następnie wypisuje je w tabeli. Pozwala ona również zmienić skalę na logarytmiczną. Użyjemy zaproponowanej przez Tukeya wartości k = 1.5.
+Wykres pudełkowy z osią po logarytmizacji jest analogiczny z wykresem pudełkowym rysującym zmienną po logarytmizacji.
+
+Powierzchnia lądowa (**TLAXX**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'TLAXX', custom_title = "powierzchni lądowej", 
+                 custom_ylab = "Powierzchnia lądowa (tys. ha)")
+```
+
+Widać, że podczas analizy powierzchni lądowej państw występują skrajne obserwacje odstające (powierzchnia Rosji) oraz inne obserwacje odstające. W celu poprawy czytelności zastosujemy skalę logarytmiczną.
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'TLAXX', log_scale = TRUE, 
+                 custom_title = "powierzchni lądowej w skali logarytmicznej", 
+                 custom_ylab = "Powierzchnia lądowa (tys. ha)")
+```
+
+Po logarytmizacji, część obserwacji odstających przestaje nimi być, ale niestety mamy nowe, ponieważ niektóre mają tak małą powierzchnię, że w naszej bazie część z nich przyjmuje wartość 0, zatem gdybyśmy wykonali logarytmizację zmiennej otrzymalibyśmy wartość $-\infty$ (punkty przycięte). Nowe obserwacje odstające powstają, ponieważ wartość jest bardzo mała.
+ 
+Procentowy udział powierzchni leśnej względem lądowej (**AFPTLA**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'AFPTLA', 
+          custom_title = "procentowego udziału powierzchni leśnej \n względem lądowej", 
+          custom_ylab = "Procentowy udział powierzchni leśnej względem lądowej")
+```
+
+Mediana procentowego udziału powierzchni leśnej względem lądowej (**AFPTLA**) znajduje się w okolicach 30-35%. Rozstęp międzykwartylowy obejmuje mniej więcej zakres 22-40%, wskazując na umiarkowane zróżnicowanie lesistości między większością państw. Wąsy rozciągają się od bardzo niskich wartości (blisko 0%) do około 60%, co pokazuje szeroki zakres typowych obserwacji. Widać obserwacje odstające występujące po stronie wysokich wartości, co oznacza kraje o wyjątkowo wysokiej lesistości, zatem wykonamy logarytmizację.
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'AFPTLA', log_scale = TRUE, 
+                 custom_title = "procentowego udziału powierzchni leśnej \n względem lądowej w skali logarytmicznej",
+                 custom_ylab = "Procentowy udział powierzchni leśnej względem lądowej")
+```
+
+Obserwacje odstające występujące wcześniej zostały zlikwidowane, jednak pojawiły się nowe.
+
+
+Rok (**Year**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'Year', print_table = FALSE, 
+                 custom_title = "lat", 
+                 custom_ylab = "Lata")
+```
+
+Rok (**Year**) nie ma obserwacji odstających, zatem nie ma potrzeby, aby dokonywać przekształceń tej zmiennej.
+
+Powierzchnia leśna (**Forest_area**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'Forest_area', 
+                 custom_title = "powierzchni leśnej", 
+                 custom_ylab = "Powierzchnia leśna (tys. ha)")
+```
+
+Wykres powierzchni leśnej jest nieczytelny, widać skrajne wartości najprawdopodobniej dla Rosji, która ma dużą powierzchnię lasów oraz inne obserwacje odstające, ale zdecydowanie bliższe wąsom. W celu poprawy czytelności zastosujemy skalę logarytmiczną.
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'Forest_area', log_scale = TRUE, 
+                 custom_title = "powierzchni leśnej w skali logarytmicznej", 
+                 custom_ylab = "Powierzchnia leśna (tys. ha)")
+```
+
+Po logarytmizacji, część obserwacji odstających przestaje nimi być, niestety mamy nowe obserwacje odstające.
+
+PKB (**GDP**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'GDP', 
+                 custom_title = "PKB", 
+                 custom_ylab = "Wartość PKB (mld $)")
+```
+
+Widać, że podczas analizy wartości PKB otrzymaliśmy wiele obserwacji odstających w tym skrajne. W celu poprawy czytelności zastosujemy skalę logarytmiczną.
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, 'GDP', log_scale = TRUE, print_table = FALSE, 
+                 custom_title = "PKB w skali logarytmicznej", 
+                 custom_ylab = "Wartość PKB (mld $)")
+```
+
+Po logarytmizacji, wszystkie obserwacje odstające przestają nimi być, zatem warto się zastanowić nad zastosowaniem nowej zmiennej **log(GDP)** w modelu.
+
+Procentowy udział gospodarki leśnej w PKB (**%GDP**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, "%GDP", 
+                 custom_title = "procentowego udziału gospodarki leśnej w PKB", 
+                 custom_ylab = "Procentowy udział gospodarki leśnej w PKB")
+```
+
+Widać, że podczas analizy udziału procentowego gospodarki leśnej w PKB otrzymaliśmy skrajne wartości oraz inne obserwacje odstające, ale zdecydowanie bliższe wąsom. Wykres może zostać poprawiony, dlatego zastosujemy skalę logarytmiczną.
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, "%GDP", log_scale = TRUE, 
+                 custom_title = "procentowego udziału gospodarki leśnej \n w PKB w skali logarytmicznej", 
+                 custom_ylab = "Procentowy udział gospodarki leśnej w PKB")
+```
+
+Po logarytmizacji, wszystkie obserwacje odstające przestają nimi być, ale pojawiają się nowe. Spowodowane są faktem, iż niektóre kraje mają wartość 0 w procentowym udziale gospodarki leśnej w PKB (**%GDP**).
+
+Wartość gospodarki leśnej (**EFV**)
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, "EFV", 
+                 custom_title = "wartości gospodarki leśnej w PKB", 
+                 custom_ylab = "Wartość gospodarki leśnej w PKB (mld $)")
+```
+
+Widać, że podczas analizy wartości gospodarki leśnej otrzymaliśmy skrajne obserwacje odstające oraz inne obserwacje odstające, ale zdecydowanie bliższe wąsom. Wykres może zostać poprawiony, dlatego zastosujemy skalę logarytmiczną.
+
+```{r, message=FALSE, warning=FALSE}
+boxplot_outliers(forest_gdp_db, "EFV", log_scale = T, 
+                 custom_title = "wartości gospodarki leśnej w PKB \n w skali logarytmicznej", 
+                 custom_ylab = "Wartość gospodarki leśnej w PKB (mld $)")
+```
+
+Po logarytmizacji, wszystkie obserwacje odstające przestają nimi być. Niestety, pojawiają się nowe obserwacje odstające.
+
+
+Zostawiamy wszystkie obserwacje odstające, dane są poprawne, ponieważ są to rzeczywiste informacje i obserwacje odstające wynikają z faktycznych danych. Na etapie tworzenia modeli będzie można zastanowić się nad ich usunięciem, np. w modelach liniowych używając wartości Cooka. W dalszej części pracy będzie można dodać zmienne po logarytmizacji, w celu usunięcia pewnych obserwacji odstających.
